@@ -175,6 +175,9 @@ const LG = {
       if (typeof item[key] === 'number' && Number.isFinite(item[key])) return item[key];
     }
     return LG.parseIdNumber(item.SellingPriceDisplay || item.Price || 0);
+  },
+  paymentCacheKey(code, nonInvoice) {
+    return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
   }
 };
 
@@ -285,15 +288,20 @@ const LG = {
     }, 200);
   }
 
-  function getCache(code) {
-    const stored = storageCache[code];
+  function scoped(code, nonInvoice) {
+    return LG.paymentCacheKey(code, nonInvoice);
+  }
+
+  function getCache(code, nonInvoice) {
+    const key = scoped(code, nonInvoice);
+    const stored = storageCache[key];
     if (!stored || !LG.isPaymentCacheFresh(stored)) {
       if (stored) {
-        delete storageCache[code];
-        memCache.delete(code);
+        delete storageCache[key];
+        memCache.delete(key);
         saveStorageCache();
       } else {
-        memCache.delete(code);
+        memCache.delete(key);
       }
       return null;
     }
@@ -302,14 +310,15 @@ const LG = {
       m: typeof stored.m === 'string' ? stored.m : '-',
       a: Number(stored.a) || 0
     };
-    memCache.set(code, val);
+    memCache.set(key, val);
     return val;
   }
 
-  function setCache(code, value) {
-    memCache.set(code, value);
+  function setCache(code, nonInvoice, value) {
+    const key = scoped(code, nonInvoice);
+    memCache.set(key, value);
 
-    storageCache[code] = {
+    storageCache[key] = {
       m: value.m,
       a: value.a,
       t: Date.now()
@@ -318,13 +327,13 @@ const LG = {
     saveStorageCache();
   }
 
-  function isTempEmpty(code) {
-    const ts = tempEmpty.get(code);
+  function isTempEmpty(code, nonInvoice) {
+    const ts = tempEmpty.get(scoped(code, nonInvoice));
     return !!ts && (Date.now() - ts < TEMP_EMPTY_TTL);
   }
 
-  function setTempEmpty(code) {
-    tempEmpty.set(code, Date.now());
+  function setTempEmpty(code, nonInvoice) {
+    tempEmpty.set(scoped(code, nonInvoice), Date.now());
   }
 
   function isNiCodeEmpty(id) {
@@ -788,15 +797,16 @@ const LG = {
   }
 
   function fetchPayment(code, nonInvoice) {
-    const cached = getCache(code);
+    const key = scoped(code, nonInvoice);
+    const cached = getCache(code, nonInvoice);
     if (cached) return Promise.resolve(cached);
 
-    if (isTempEmpty(code)) {
+    if (isTempEmpty(code, nonInvoice)) {
       return Promise.resolve({ m: '', a: 0 });
     }
 
-    if (inflight.has(code)) {
-      return inflight.get(code);
+    if (inflight.has(key)) {
+      return inflight.get(key);
     }
 
     const build = nonInvoice ? buildNonInvoicePaymentUrl : buildApiUrl;
@@ -817,7 +827,7 @@ const LG = {
 
         if (!item) {
           const kind = LG.classifyPaymentFetch({ networkError: false, itemFound: false, value: null });
-          if (kind === 'tempEmpty') setTempEmpty(code);
+          if (kind === 'tempEmpty') setTempEmpty(code, nonInvoice);
           return { m: '', a: 0 };
         }
 
@@ -827,17 +837,17 @@ const LG = {
         };
 
         const kind = LG.classifyPaymentFetch({ networkError: false, itemFound: true, value });
-        if (kind === 'persist') setCache(code, value);
-        else if (kind === 'tempEmpty') setTempEmpty(code);
+        if (kind === 'persist') setCache(code, nonInvoice, value);
+        else if (kind === 'tempEmpty') setTempEmpty(code, nonInvoice);
         return kind === 'persist' ? value : { m: value.m || '', a: value.a || 0 };
       } catch (err) {
         return { m: '', a: 0 };
       } finally {
-        inflight.delete(code);
+        inflight.delete(key);
       }
     })();
 
-    inflight.set(code, promise);
+    inflight.set(key, promise);
     return promise;
   }
 
@@ -1355,11 +1365,11 @@ const LG = {
 
       if (code && /^PC/i.test(code)) {
         // Kolom code tersedia: pakai kode PC langsung
-        const cached = getCache(code);
+        const cached = getCache(code, true);
 
         if (cached) {
           payments.set(row, cached);
-        } else if (!inflight.has(code) && !isTempEmpty(code)) {
+        } else if (!inflight.has(scoped(code, true)) && !isTempEmpty(code, true)) {
           needPayment.push(code);
         }
 
@@ -1373,11 +1383,11 @@ const LG = {
       const mapped = niCodeCache.get(id);
 
       if (mapped) {
-        const cached = getCache(mapped);
+        const cached = getCache(mapped, true);
 
         if (cached) {
           payments.set(row, cached);
-        } else if (!inflight.has(mapped) && !isTempEmpty(mapped)) {
+        } else if (!inflight.has(scoped(mapped, true)) && !isTempEmpty(mapped, true)) {
           needPayment.push(mapped);
         }
       } else if (!isNiCodeEmpty(id) && !niCodeInflight.has(id)) {
@@ -1461,7 +1471,7 @@ const LG = {
       const paymentMap = Object.create(null);
 
       codes.forEach((code) => {
-        const cached = getCache(code);
+        const cached = getCache(code, false);
         if (cached) {
           paymentMap[code] = cached;
         }
@@ -1474,7 +1484,7 @@ const LG = {
       });
 
       const missing = codes.filter((code) => {
-        return !paymentMap[code] && !inflight.has(code) && !isTempEmpty(code);
+        return !paymentMap[code] && !inflight.has(scoped(code, false)) && !isTempEmpty(code, false);
       });
 
       if (missing.length) {
