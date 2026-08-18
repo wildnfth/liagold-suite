@@ -2677,7 +2677,16 @@ group: item.GroupCode || '',
 }
 function rebuildProductMap() {
 productMap = new Map();
-allProducts.forEach(p => productMap.set(String(p.codeProduct).toLowerCase(), p));
+let dupes = 0;
+allProducts.forEach(p => {
+const k = String(p.codeProduct).toLowerCase();
+if (productMap.has(k)) {
+dupes++;
+return;
+}
+productMap.set(k, p);
+});
+if (dupes > 0) updateStatus(`⚠️ ${dupes} codeProduct duplikat, dipakai entri pertama`);
 }
 function injectStyles() {
 const existingStyle = document.getElementById('lg-styles');
@@ -3685,7 +3694,7 @@ isLoading = false;
 async function loadTrayData(trayId) {
 const myLoadId = ++currentLoadId;
 isLoading = true;
-allProducts = [];
+const tmp = [];
 let page = 0;
 const isAll = trayId === 'all';
 const label = isAll ? 'Semua Baki' : `Baki ${trayId}`;
@@ -3694,26 +3703,28 @@ while (true) {
 const url = isAll
 ? `${API_STOCK}&pageNumber=${page}&pageSize=${PAGE_SIZE}`
 : `${API_STOCK}&trayFilter=${trayId}&pageNumber=${page}&pageSize=${PAGE_SIZE}`;
-updateStatus(`⏳ ${label}… hal ${page + 1} (${allProducts.length})`);
+updateStatus(`⏳ ${label}… hal ${page + 1} (${tmp.length})`);
 const res = await fetch(url);
 if (!res.ok) throw new Error(`HTTP ${res.status}`);
 const items = (await res.json()).items || [];
 if (!items.length) break;
 if (myLoadId !== currentLoadId) return;
-items.forEach(i => allProducts.push(mapItem(i)));
+items.forEach(i => tmp.push(mapItem(i)));
 if (items.length < PAGE_SIZE) break;
 page++;
 await sleep(300);
 if (myLoadId !== currentLoadId) return;
 }
 if (myLoadId !== currentLoadId) return;
+allProducts = tmp;
 rebuildProductMap();
 applyFilters();
 updateStatus(`✅ ${label}: ${allProducts.length} produk dimuat`);
 } catch (e) {
 if (myLoadId !== currentLoadId) return;
 updateStatus(`⚠️ Gagal: ${e.message}`);
-if (allProducts.length) {
+if (tmp.length) {
+allProducts = tmp;
 rebuildProductMap();
 applyFilters();
 }
