@@ -179,6 +179,12 @@ const LG = {
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
   },
+  nextPaymentLookupPage({ found, pageNumber, itemCount, pageSize, maxPages }) {
+    if (found) return null;
+    if (itemCount < pageSize) return null;
+    if (pageNumber + 1 >= maxPages) return null;
+    return pageNumber + 1;
+  },
   buildNiLookupUrl(origin, path, filter, pageSize, pageNumber) {
     if (pageNumber == null) pageNumber = 0;
     const url = new URL(path, origin);
@@ -717,12 +723,14 @@ const LG = {
     return sums;
   }
 
-  function buildApiUrl(filter) {
+  function buildApiUrl(filter, pageNumber, pageSize) {
+    if (pageNumber == null) pageNumber = 0;
+    if (pageSize == null) pageSize = 50;
     const params = new URLSearchParams({
       sortOrder: 'desc',
       sortField: 'id',
-      pageNumber: '0',
-      pageSize: '20',
+      pageNumber: String(pageNumber),
+      pageSize: String(pageSize),
       startIndexCustom: '-1',
       generalFilter: filter
     });
@@ -731,8 +739,10 @@ const LG = {
   }
 
   // List pembelian non-invoice (punya PaymentMethodName/TotalPurchase, format sama /web/purchasing)
-  function buildNonInvoicePaymentUrl(filter) {
-    return LG.buildNiLookupUrl(window.location.origin, '/web/purchasing/non-invoice', filter, 20, 0);
+  function buildNonInvoicePaymentUrl(filter, pageNumber, pageSize) {
+    if (pageNumber == null) pageNumber = 0;
+    if (pageSize == null) pageSize = 50;
+    return LG.buildNiLookupUrl(window.location.origin, '/web/purchasing/non-invoice', filter, pageSize, pageNumber);
   }
 
   function runFetchQueue() {
@@ -816,14 +826,31 @@ const LG = {
 
     const promise = (async () => {
       try {
-        let json = await fetchJson(build(code));
-        let item = findExactItem(json, code);
+        const pageSize = 50;
+        const maxPages = 5;
+        let json = null;
+        let item = null;
+        let page = 0;
+        while (true) {
+          json = await fetchJson(build(code, page, pageSize));
+          item = findExactItem(json, code);
+          const n = ((json && json.items) || []).length;
+          const next = LG.nextPaymentLookupPage({
+            found: !!item,
+            pageNumber: page,
+            itemCount: n,
+            pageSize,
+            maxPages
+          });
+          if (item || next == null) break;
+          page = next;
+        }
 
         if (!item) {
           const digits = code.replace(/\D/g, '');
 
           if (digits && digits !== code) {
-            json = await fetchJson(build(digits));
+            json = await fetchJson(build(digits, 0, pageSize));
             item = findExactItem(json, code);
           }
         }
