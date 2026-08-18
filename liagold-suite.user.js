@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.26
-// @description  v1.0.26: fix session expiry race, deterministic scan keys, id-ID parse, footer ignores totalizer
+// @version      1.0.29
+// @description  v1.0.29: Metode Bayar only — drop injected Total Bayar column and footer sum
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -15,8 +15,8 @@
 if (window.__lgUltimateSuite) return;
 window.__lgUltimateSuite = true;
 
-// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js
-// Keep bodies identical. Later tasks fill history-key + parse-id-number.
+// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js, lib/payment-page.js
+// Keep bodies identical.
 const LG = {
   DATA_TTL_MS: 12 * 60 * 60 * 1000,
   parseTimestamp(value) {
@@ -81,6 +81,15 @@ const LG = {
     const num = parseFloat(raw);
     if (!Number.isFinite(num)) return 0;
     return negative ? -Math.abs(num) : num;
+  },
+  isPaymentInjectPage(pathname) {
+    return /^\/purchasing\/?$/.test(pathname) || /^\/purchasing-non-invoice\/?$/.test(pathname);
+  },
+  isPurchasingNonInvoicePage(pathname) {
+    return /^\/purchasing-non-invoice\/?$/.test(pathname);
+  },
+  isPurchasingFamilyChild(pathname) {
+    return /^\/purchasing-non-invoice\/.+/.test(pathname) || /^\/purchasing\/.+/.test(pathname);
   }
 };
 
@@ -394,7 +403,7 @@ const LG = {
   }
 
   function isNonInvoicePage() {
-    return location.pathname.indexOf('/purchasing-non-invoice') !== -1;
+    return LG.isPurchasingNonInvoicePage(location.pathname);
   }
 
   // Tabel non-invoice: ada purchasePrice + description, tanpa notePrice.
@@ -486,15 +495,7 @@ const LG = {
       headerRow.insertBefore(th, anchorTh);
     }
 
-    if (!headerRow.querySelector(`th.${AMOUNT_HEADER_CLASS}`)) {
-      const th = document.createElement('th');
-      th.className = `mat-header-cell ${AMOUNT_HEADER_CLASS} ${AMOUNT_CELL_CLASS}`;
-      th.setAttribute('role', 'columnheader');
-      th.textContent = 'Total Bayar';
-
-      const next = nonInvoice ? anchorTh : (anchorTh.nextElementSibling || null);
-      headerRow.insertBefore(th, next);
-    }
+    headerRow.querySelectorAll(`th.${AMOUNT_HEADER_CLASS}`).forEach((el) => el.remove());
 
     return true;
   }
@@ -515,15 +516,7 @@ const LG = {
       row.insertBefore(td, anchorCell);
     }
 
-    if (!row.querySelector(`td.${AMOUNT_CELL_CLASS}`)) {
-      const td = document.createElement('td');
-      td.className = `mat-cell ${AMOUNT_CELL_CLASS}`;
-      td.setAttribute('role', 'gridcell');
-      td.textContent = '';
-
-      const next = nonInvoice ? anchorCell : (anchorCell.nextElementSibling || null);
-      row.insertBefore(td, next);
-    }
+    row.querySelectorAll(`td.${AMOUNT_CELL_CLASS}`).forEach((el) => el.remove());
   }
 
   function getVisibleRows(table) {
@@ -973,18 +966,11 @@ const LG = {
       const data = paymentMap[code];
 
       const methodCell = row.querySelector(`td.${METHOD_CELL_CLASS}`);
-      const amountCell = row.querySelector(`td.${AMOUNT_CELL_CLASS}`);
 
       if (methodCell) {
         const methodText = data ? (data.m || '') : '';
         setText(methodCell, methodText);
         setTitle(methodCell, methodText);
-      }
-
-      if (amountCell) {
-        const amountText = data && data.a > 0 ? fmtMoney(data.a) : '';
-        setText(amountCell, amountText);
-        setTitle(amountCell, amountText);
       }
     });
   }
@@ -994,18 +980,11 @@ const LG = {
       const data = payments.get(row);
 
       const methodCell = row.querySelector(`td.${METHOD_CELL_CLASS}`);
-      const amountCell = row.querySelector(`td.${AMOUNT_CELL_CLASS}`);
 
       if (methodCell) {
         const methodText = data ? (data.m || '') : '';
         setText(methodCell, methodText);
         setTitle(methodCell, methodText);
-      }
-
-      if (amountCell) {
-        const amountText = data && data.a > 0 ? fmtMoney(data.a) : '';
-        setText(amountCell, amountText);
-        setTitle(amountCell, amountText);
       }
     });
   }
@@ -1197,17 +1176,6 @@ const LG = {
       tr.dataset.structSig = structSig;
     }
 
-    let paymentTotal = 0;
-
-    codes.forEach((code) => {
-      const data = paymentMap[code];
-      if (!data) return;
-
-      paymentTotal += Number(data.a) || 0;
-    });
-
-    const amountText = paymentTotal > 0 ? fmtMoney(paymentTotal) : '';
-
     for (let i = 0; i < totalColumns; i++) {
       const td = tr.children[i];
       const th = headerCells[i];
@@ -1226,8 +1194,8 @@ const LG = {
       }
 
       if (th.classList.contains(AMOUNT_HEADER_CLASS)) {
-        setText(td, amountText);
-        setTitle(td, amountText);
+        setText(td, '');
+        setTitle(td, '');
         continue;
       }
 
@@ -1252,9 +1220,7 @@ const LG = {
     alignFooterCells(table, tr, headerCells, labelIdx);
   }
 
-  // Isi total "Total Bayar" pada baris TOTAL milik Module 2 (dijumlah per transaksi unik,
-  // karena beberapa baris bisa satu transaksi/kode PC yang sama)
-  function fillNonInvoiceFooterTotals(table, rows, payments) {
+  function fillNonInvoiceFooterTotals(table) {
     try {
       const tr = table.querySelector('tfoot tr.gold-total-footer-row');
       if (!tr) return;
@@ -1262,49 +1228,17 @@ const LG = {
       const headerCells = Array.from(
         table.querySelectorAll('thead tr.mat-header-row th.mat-header-cell')
       );
-      const amountIdx = headerCells.findIndex((th) => th.classList.contains(AMOUNT_HEADER_CLASS));
       const methodIdx = headerCells.findIndex((th) => th.classList.contains(METHOD_HEADER_CLASS));
-      if (amountIdx === -1) return;
+      const amountIdx = headerCells.findIndex((th) => th.classList.contains(AMOUNT_HEADER_CLASS));
 
-      const amountTd = tr.children[amountIdx];
-      const methodTd = methodIdx !== -1 ? tr.children[methodIdx] : null;
-      if (!amountTd) return;
+      if (methodIdx !== -1 && tr.children[methodIdx]) {
+        setText(tr.children[methodIdx], '');
+        setTitle(tr.children[methodIdx], '');
+      }
 
-      const unique = new Map();
-
-      rows.forEach((row) => {
-        const code = getRowCode(row);
-        let key = null;
-
-        if (code && /^PC/i.test(code)) {
-          key = code;
-        } else {
-          const id = getRowId(row);
-          key = id ? (niCodeCache.get(id) || null) : null;
-        }
-
-        if (!key || unique.has(key)) return;
-
-        const data = payments.get(row);
-        if (data) unique.set(key, data);
-      });
-
-      let total = 0;
-      unique.forEach((data) => {
-        total += Number(data.a) || 0;
-      });
-
-      const amountText = total > 0 ? fmtMoney(total) : '';
-
-      amountTd.classList.add(AMOUNT_CELL_CLASS);
-      setStyle(amountTd, 'textAlign', 'right');
-      setText(amountTd, amountText);
-      setTitle(amountTd, amountText);
-
-      if (methodTd) {
-        const methodText = unique.size > 0 ? `${unique.size} transaksi` : '';
-        setText(methodTd, methodText);
-        setTitle(methodTd, methodText);
+      if (amountIdx !== -1 && tr.children[amountIdx]) {
+        setText(tr.children[amountIdx], '');
+        setTitle(tr.children[amountIdx], '');
       }
     } catch (e) {
       // ignore
@@ -1354,7 +1288,7 @@ const LG = {
     domWrite(() => {
       rows.forEach(ensureRowCells);
       fillRowsByMap(rows, payments);
-      fillNonInvoiceFooterTotals(table, rows, payments);
+      fillNonInvoiceFooterTotals(table);
     });
 
     // Footer TOTAL dikelola Module 2; di sini cukup kolom per baris
@@ -1459,8 +1393,22 @@ const LG = {
     }
   }
 
+  function stripPurchasingInjects() {
+    document.querySelectorAll(
+      'th.gold-pay-method-header, td.gold-pay-method, th.gold-pay-amount-header, td.gold-pay-amount'
+    ).forEach((el) => el.remove());
+    document.querySelectorAll(
+      'tfoot tr.gold-pay-footer-row, tfoot tr.gold-total-footer-row'
+    ).forEach((el) => el.remove());
+  }
+
   function updateAll() {
     if (document.hidden) return;
+    if (LG.isPurchasingFamilyChild(location.pathname)) {
+      stripPurchasingInjects();
+      return;
+    }
+    if (!LG.isPaymentInjectPage(location.pathname)) return;
 
     try {
       injectStyle();
@@ -1711,7 +1659,14 @@ tr.appendChild(td);
 }
 tr.dataset.signature = signature;
 }
+function stripYellowFooter() {
+document.querySelectorAll('tfoot tr.gold-total-footer-row').forEach((el) => el.remove());
+}
 function updateAll() {
+if (LG.isPurchasingFamilyChild(location.pathname)) {
+stripYellowFooter();
+return;
+}
 injectStyle();
 const tables = Array
 .from(document.querySelectorAll('table.mat-table'))
