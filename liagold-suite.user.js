@@ -15,7 +15,7 @@
 if (window.__lgUltimateSuite) return;
 window.__lgUltimateSuite = true;
 
-// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js, lib/payment-page.js, lib/form-fill-policy.js, lib/payment-cache-policy.js, lib/totalizer-numbers.js, lib/totalizer-selection.js
+// synced from lib/*.js — keep LG bodies identical
 // Keep bodies identical.
 const LG = {
   DATA_TTL_MS: 12 * 60 * 60 * 1000,
@@ -144,6 +144,12 @@ const LG = {
   buildSelectionKey({ rowCode, rowId, colClass, val, grp }) {
     const row = rowCode || rowId || '';
     return row + '||' + (colClass || '') + '||' + (val || '') + '||' + (grp || '');
+  },
+  nextProcessDelay(now, lastProcessTime, minGapMs) {
+    if (!lastProcessTime) return 0;
+    const elapsed = now - lastProcessTime;
+    if (elapsed >= minGapMs) return 0;
+    return minGapMs - elapsed;
   }
 };
 
@@ -2198,6 +2204,7 @@ selfMutating = wasMutating;
 }
 let processing = false;
 let lastProcessTime = 0;
+let processTimer = null;
 function scan(root) {
 const tables = root.querySelectorAll(TABLE_ZONE);
 const list = [];
@@ -2216,11 +2223,17 @@ while ((n = walker.nextNode())) list.push(n);
 list.forEach(processTextNode);
 }
 function processAll() {
-if (processing) return;
+if (processing) {
+if (!processTimer) processTimer = setTimeout(() => { processTimer = null; processAll(); }, 500);
+return;
+}
 if (!isAllowedPage()) return;
-const now = Date.now();
-if (now - lastProcessTime < 500) return;
-lastProcessTime = now;
+const delay = LG.nextProcessDelay(Date.now(), lastProcessTime, 500);
+if (delay > 0) {
+if (!processTimer) processTimer = setTimeout(() => { processTimer = null; processAll(); }, delay);
+return;
+}
+lastProcessTime = Date.now();
 processing = true;
 obs.disconnect();
 try {
