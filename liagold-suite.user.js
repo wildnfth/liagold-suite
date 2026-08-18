@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.26
-// @description  v1.0.26: fix session expiry race, deterministic scan keys, id-ID parse, footer ignores totalizer
+// @version      1.0.27
+// @description  v1.0.27: payment columns only on /purchasing and /purchasing-non-invoice; method footer has no total
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -15,8 +15,8 @@
 if (window.__lgUltimateSuite) return;
 window.__lgUltimateSuite = true;
 
-// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js
-// Keep bodies identical. Later tasks fill history-key + parse-id-number.
+// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js, lib/payment-page.js
+// Keep bodies identical.
 const LG = {
   DATA_TTL_MS: 12 * 60 * 60 * 1000,
   parseTimestamp(value) {
@@ -81,6 +81,12 @@ const LG = {
     const num = parseFloat(raw);
     if (!Number.isFinite(num)) return 0;
     return negative ? -Math.abs(num) : num;
+  },
+  isPaymentInjectPage(pathname) {
+    return /^\/purchasing\/?$/.test(pathname) || /^\/purchasing-non-invoice\/?$/.test(pathname);
+  },
+  isPurchasingNonInvoicePage(pathname) {
+    return /^\/purchasing-non-invoice\/?$/.test(pathname);
   }
 };
 
@@ -394,7 +400,7 @@ const LG = {
   }
 
   function isNonInvoicePage() {
-    return location.pathname.indexOf('/purchasing-non-invoice') !== -1;
+    return LG.isPurchasingNonInvoicePage(location.pathname);
   }
 
   // Tabel non-invoice: ada purchasePrice + description, tanpa notePrice.
@@ -1302,9 +1308,8 @@ const LG = {
       setTitle(amountTd, amountText);
 
       if (methodTd) {
-        const methodText = unique.size > 0 ? `${unique.size} transaksi` : '';
-        setText(methodTd, methodText);
-        setTitle(methodTd, methodText);
+        setText(methodTd, '');
+        setTitle(methodTd, '');
       }
     } catch (e) {
       // ignore
@@ -1461,6 +1466,7 @@ const LG = {
 
   function updateAll() {
     if (document.hidden) return;
+    if (!LG.isPaymentInjectPage(location.pathname)) return;
 
     try {
       injectStyle();
