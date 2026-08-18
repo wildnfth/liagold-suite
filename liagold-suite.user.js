@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.34
-// @description  v1.0.34: remaining important — scanner storage/price/stats + scoped payment cache + clean NI map
+// @version      1.0.35
+// @description  v1.0.35: medium issues — cache hygiene, tray load, pending queue, crypto session, no TTL auto-delete
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -194,6 +194,14 @@ const LG = {
     if (itemCount < pageSize) return null;
     if (pageNumber + 1 >= maxPages) return null;
     return pageNumber + 1;
+  },
+  randomBase36(length) {
+    const alphabet = '0123456789abcdefghijklmnopqrstuvwxyz';
+    const bytes = new Uint8Array(length);
+    crypto.getRandomValues(bytes);
+    let out = '';
+    for (let i = 0; i < length; i++) out += alphabet[bytes[i] % 36];
+    return out;
   },
   buildNiLookupUrl(origin, path, filter, pageSize, pageNumber) {
     if (pageNumber == null) pageNumber = 0;
@@ -2460,7 +2468,7 @@ rebuildScannedCodes();
 let sessionId = localStorage.getItem('lg_session') || null;
 let myName = localStorage.getItem('lg_mp_name') || '';
 let myId = localStorage.getItem('lg_mp_id') || (() => {
-const id = 'u' + Math.random().toString(36).substr(2, 8);
+const id = 'u' + LG.randomBase36(8);
 localStorage.setItem('lg_mp_id', id);
 return id;
 })();
@@ -2607,13 +2615,11 @@ if (!sessionId || isDeletingSession) return;
 if (!expiryReady || !LG.isDataExpired(lastScanAt)) return;
 isDeletingSession = true;
 try {
-updateStatus('🗑️ Data scan expired (>12 jam). Menghapus sesi dari cloud...');
-const res = await fetch(`${FIREBASE}/opname/${sessionId}.json`, { method: 'DELETE' });
-if (!res.ok) throw new Error(`HTTP ${res.status}`);
+persistScanLog();
+stopCountdownInterval();
 cleanupSessionLocal();
-alert('⏰ Data scan telah EXPIRED (>12 jam tanpa scan).\nSesi telah dihapus otomatis dari cloud.\nSemua peserta telah keluar.\nBuat sesi baru untuk melanjutkan.');
-} catch (e) {
-updateStatus('❌ Gagal hapus sesi expired: ' + e.message);
+updateStatus('⏰ Sesi expired di device ini. Data cloud tidak dihapus otomatis.');
+alert('⏰ Data scan sudah lewat 12 jam tanpa scan di device ini.\nKamu keluar ke mode solo.\nSesi cloud tidak dihapus otomatis — pakai “Selesai & Hapus” jika semua sudah selesai.');
 } finally {
 isDeletingSession = false;
 }
@@ -3072,7 +3078,7 @@ async function createSession() {
 const nama = document.getElementById('lg-mp-name').value.trim() || 'Anonim';
 myName = nama;
 localStorage.setItem('lg_mp_name', nama);
-const code = Math.random().toString(36).substr(2, 6).toUpperCase();
+const code = LG.randomBase36(8).toUpperCase();
 const now = new Date().toISOString();
 try {
 await fbPut(`/opname/${code}/meta`, {
