@@ -15,6 +15,29 @@
 if (window.__lgUltimateSuite) return;
 window.__lgUltimateSuite = true;
 
+// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js
+// Keep bodies identical. Later tasks fill history-key + parse-id-number.
+const LG = {
+  DATA_TTL_MS: 12 * 60 * 60 * 1000,
+  parseTimestamp(value) {
+    if (value == null || value === '') return null;
+    const t = new Date(value).getTime();
+    return Number.isFinite(t) ? t : null;
+  },
+  getRemainingTime(lastScanAt, now, ttlMs) {
+    if (now == null) now = Date.now();
+    if (ttlMs == null) ttlMs = LG.DATA_TTL_MS;
+    const t = LG.parseTimestamp(lastScanAt);
+    if (t == null) return null;
+    return Math.max(0, t + ttlMs - now);
+  },
+  isDataExpired(lastScanAt, now, ttlMs) {
+    const remaining = LG.getRemainingTime(lastScanAt, now, ttlMs);
+    if (remaining == null) return false;
+    return remaining <= 0;
+  }
+};
+
 // ==========================================
 // MODULE 1: Gold ERP - Payment Method Detail
 // ==========================================
@@ -2365,6 +2388,7 @@ let filterBtnBound = false;
 let batchSize = parseInt(localStorage.getItem('lg_batchSize') || '25');
 let batchDelay = parseInt(localStorage.getItem('lg_batchDelay') || '1000');
 let lastScanAt = null;
+let expiryReady = false;
 let countdownIntervalId = null;
 let sessionCreatedAt = null;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -2398,14 +2422,12 @@ localStorage.setItem('lg_lastScanAt', lastScanAt);
 updateCountdownDisplay();
 }
 function getRemainingTime() {
-if (!lastScanAt) return 0;
-const lastScanTime = new Date(lastScanAt).getTime();
-const expiresAt = lastScanTime + DATA_TTL_MS;
-const remaining = expiresAt - Date.now();
-return Math.max(0, remaining);
+const remaining = LG.getRemainingTime(lastScanAt);
+return remaining == null ? 0 : remaining;
 }
 function isDataExpired() {
-return getRemainingTime() <= 0;
+if (!expiryReady) return false;
+return LG.isDataExpired(lastScanAt);
 }
 function updateCountdownDisplay() {
 const countdownEl = document.getElementById('lg-countdown');
@@ -2416,7 +2438,7 @@ return;
 }
 countdownEl.style.display = 'block';
 const remaining = getRemainingTime();
-if (remaining <= 0) {
+if (expiryReady && LG.isDataExpired(lastScanAt)) {
 countdownEl.innerHTML = '⏰ DATA EXPIRED';
 countdownEl.style.color = '#dc2626';
 countdownEl.style.fontWeight = '700';
@@ -2449,6 +2471,7 @@ countdownIntervalId = null;
 }
 }
 function handleSoloExpiry() {
+if (!expiryReady || !LG.isDataExpired(lastScanAt)) return;
 if (scanLog.length === 0) return;
 updateStatus('🗑️ Data scan expired (>12 jam). Menghapus otomatis...');
 scanLog = [];
@@ -2464,6 +2487,7 @@ alert('⏰ Data scan telah EXPIRED (>12 jam tanpa scan).\nSemua data scan lokal 
 }
 async function handleOnlineExpiry() {
 if (!sessionId || isDeletingSession) return;
+if (!expiryReady || !LG.isDataExpired(lastScanAt)) return;
 isDeletingSession = true;
 try {
 updateStatus('🗑️ Data scan expired (>12 jam). Menghapus sesi dari cloud...');
@@ -2482,12 +2506,12 @@ if (isMulti()) {
 try {
 const res = await fetch(`${FIREBASE}/opname/${sessionId}/meta.json`);
 const meta = await res.json();
-lastScanAt = meta?.lastScanAt || meta?.dibuat || null;
+lastScanAt = meta?.lastScanAt || meta?.dibuat || lastScanAt || null;
 } catch (e) {
-lastScanAt = null;
+// keep previous lastScanAt
 }
 } else {
-lastScanAt = localStorage.getItem('lg_lastScanAt') || null;
+lastScanAt = localStorage.getItem('lg_lastScanAt') || lastScanAt || null;
 }
 updateCountdownDisplay();
 }
@@ -4396,7 +4420,11 @@ injectUI();
 updateMpUI();
 renderLog();
 updateStats();
-loadLastScanAt();
+expiryReady = false;
+loadLastScanAt().finally(() => {
+expiryReady = true;
+updateCountdownDisplay();
+});
 startCountdownInterval();
 if (isMulti()) {
 listenSession();
