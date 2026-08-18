@@ -2065,8 +2065,8 @@ showToast._t = setTimeout(() => toast.classList.remove('lgt-show'), 1500);
 document.addEventListener('click', function (e) {
 const span = e.target.closest && e.target.closest('.lgt-num');
 if (!span) return;
+if (e.target.closest('a, button, input, textarea, select')) return;
 e.stopPropagation();
-e.preventDefault();
 const grp = span.dataset.grp;
 const isSel = span.classList.contains('lgt-sel');
 const isNeg = span.classList.contains('lgt-neg');
@@ -2092,7 +2092,7 @@ span.classList.remove('lgt-sel', 'lgt-neg');
 removeSelection(span);
 }
 update();
-}, true);
+}, false);
 panel.querySelector('#lgt-all').addEventListener('click', () => {
 document.querySelectorAll('.lgt-num.lgt-sel[data-grp="R"]').forEach((s) => {
 s.classList.remove('lgt-sel', 'lgt-neg');
