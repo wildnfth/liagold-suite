@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.31
-// @description  v1.0.31: form-fill integrity + payment cache TTL 30m, no error/empty persist
+// @version      1.0.32
+// @description  v1.0.32: totalizer full money tokens, stable selection, bubble clicks, reschedule wrap, history re-hook
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -15,7 +15,7 @@
 if (window.__lgUltimateSuite) return;
 window.__lgUltimateSuite = true;
 
-// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js, lib/payment-page.js, lib/form-fill-policy.js, lib/payment-cache-policy.js
+// synced from lib/*.js — keep LG bodies identical
 // Keep bodies identical.
 const LG = {
   DATA_TTL_MS: 12 * 60 * 60 * 1000,
@@ -126,6 +126,30 @@ const LG = {
     if (!itemFound) return 'tempEmpty';
     if (LG.isEmptyPayment(value)) return 'tempEmpty';
     return 'persist';
+  },
+  findNumberHits(text, mode) {
+    const LONG_RE = /\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d{4,}(?:[.,]\d+)?|\d{1,3}(?:[.,]\d+)?/g;
+    const STRICT_RE = /\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?/g;
+    const re = mode === 'strict' ? STRICT_RE : LONG_RE;
+    re.lastIndex = 0;
+    const hits = [];
+    let m;
+    const src = String(text ?? '');
+    while ((m = re.exec(src)) !== null) {
+      hits.push({ v: m[0], i: m.index });
+      if (m.index === re.lastIndex) re.lastIndex++;
+    }
+    return hits;
+  },
+  buildSelectionKey({ rowCode, rowId, colClass, val, grp }) {
+    const row = rowCode || rowId || '';
+    return row + '||' + (colClass || '') + '||' + (val || '') + '||' + (grp || '');
+  },
+  nextProcessDelay(now, lastProcessTime, minGapMs) {
+    if (!lastProcessTime) return 0;
+    const elapsed = now - lastProcessTime;
+    if (elapsed >= minGapMs) return 0;
+    return minGapMs - elapsed;
   }
 };
 
@@ -1958,8 +1982,6 @@ panel.querySelector('#lgt-close').addEventListener('click', (e) => {
 e.stopPropagation();
 setOpen(false);
 });
-const REG_LONG = /\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?/g;
-const REG_STRICT = /\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?/g;
 const fmt = (n) => Math.abs(n).toLocaleString('id-ID');
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 let prevCount = 0;
@@ -1968,15 +1990,18 @@ const selectionMemory = new Map();
 function getSelectionKey(span) {
 const row = span.closest('mat-row, .mat-row, tr');
 const cell = span.closest('mat-cell, .mat-cell, td');
+let rowCode = '';
 let rowId = '';
 if (row) {
-const firstCell = row.querySelector('mat-cell, .mat-cell, td');
-rowId = firstCell ? firstCell.textContent.trim().substring(0, 50) : '';
+const codeCell = row.querySelector('td.mat-column-code, td.cdk-column-code, .mat-column-code');
+const idCell = row.querySelector('td.mat-column-id, td.cdk-column-id, .mat-column-id');
+if (codeCell) rowCode = codeCell.textContent.trim();
+if (idCell) rowId = idCell.textContent.trim();
 }
-const cellClass = cell ? Array.from(cell.classList).filter(c => c.startsWith('mat-column-')).join(',') : '';
+const colClass = cell ? Array.from(cell.classList).filter((c) => c.startsWith('mat-column-')).join(',') : '';
 const val = span.dataset.lgtVal || '';
 const grp = span.dataset.grp || '';
-return `${rowId}||${cellClass}||${val}||${grp}`;
+return LG.buildSelectionKey({ rowCode, rowId, colClass, val, grp });
 }
 function saveSelection(span, neg) {
 const key = getSelectionKey(span);
@@ -2046,8 +2071,8 @@ showToast._t = setTimeout(() => toast.classList.remove('lgt-show'), 1500);
 document.addEventListener('click', function (e) {
 const span = e.target.closest && e.target.closest('.lgt-num');
 if (!span) return;
+if (e.target.closest('a, button, input, textarea, select')) return;
 e.stopPropagation();
-e.preventDefault();
 const grp = span.dataset.grp;
 const isSel = span.classList.contains('lgt-sel');
 const isNeg = span.classList.contains('lgt-neg');
@@ -2073,7 +2098,7 @@ span.classList.remove('lgt-sel', 'lgt-neg');
 removeSelection(span);
 }
 update();
-}, true);
+}, false);
 panel.querySelector('#lgt-all').addEventListener('click', () => {
 document.querySelectorAll('.lgt-num.lgt-sel[data-grp="R"]').forEach((s) => {
 s.classList.remove('lgt-sel', 'lgt-neg');
@@ -2135,14 +2160,14 @@ const TABLE_ZONE = 'mat-table, .mat-table, table, [role="grid"]';
 const SKIP = '#lgt-panel,#lgt-fab,#lgt-toast,.lgt-num,script,style,noscript,input,textarea,select,button,form,mat-form-field,.mat-form-field,[contenteditable],mat-dialog-container,.mat-dialog-container,mat-step,mat-expansion-panel';
 function groupOf(node) {
 const cell = node.parentNode ? node.parentNode.closest('mat-cell, td') : null;
-if (!cell) return { grp: 'X', re: REG_STRICT };
+if (!cell) return { grp: 'X', mode: 'strict' };
 const cls = cell.className || '';
-if (cls.includes('mat-column-totalReal')) return { grp: 'T', re: REG_LONG };
-if (cls.includes('mat-column-cashBanks')) return { grp: 'R', re: REG_LONG };
+if (cls.includes('mat-column-totalReal')) return { grp: 'T', mode: 'long' };
+if (cls.includes('mat-column-cashBanks')) return { grp: 'R', mode: 'long' };
 if (cls.includes('mat-column-price') || cls.includes('mat-column-total') || cls.includes('mat-column-amount')) {
-return { grp: 'X', re: REG_LONG };
+return { grp: 'X', mode: 'long' };
 }
-return { grp: 'X', re: REG_STRICT };
+return { grp: 'X', mode: 'strict' };
 }
 let selfMutating = false;
 function processTextNode(node) {
@@ -2152,14 +2177,8 @@ if (parent.closest(SKIP)) return;
 if (!parent.closest(TABLE_ZONE)) return;
 const text = node.nodeValue;
 if (!text || !/\d/.test(text)) return;
-const { grp, re } = groupOf(node);
-re.lastIndex = 0;
-const hits = [];
-let m;
-while ((m = re.exec(text)) !== null) {
-hits.push({ v: m[0], i: m.index });
-if (m.index === re.lastIndex) re.lastIndex++;
-}
+const { grp, mode } = groupOf(node);
+const hits = LG.findNumberHits(text, mode);
 if (!hits.length) return;
 const wasMutating = selfMutating;
 selfMutating = true;
@@ -2185,6 +2204,7 @@ selfMutating = wasMutating;
 }
 let processing = false;
 let lastProcessTime = 0;
+let processTimer = null;
 function scan(root) {
 const tables = root.querySelectorAll(TABLE_ZONE);
 const list = [];
@@ -2203,11 +2223,17 @@ while ((n = walker.nextNode())) list.push(n);
 list.forEach(processTextNode);
 }
 function processAll() {
-if (processing) return;
+if (processing) {
+if (!processTimer) processTimer = setTimeout(() => { processTimer = null; processAll(); }, 500);
+return;
+}
 if (!isAllowedPage()) return;
-const now = Date.now();
-if (now - lastProcessTime < 500) return;
-lastProcessTime = now;
+const delay = LG.nextProcessDelay(Date.now(), lastProcessTime, 500);
+if (delay > 0) {
+if (!processTimer) processTimer = setTimeout(() => { processTimer = null; processAll(); }, delay);
+return;
+}
+lastProcessTime = Date.now();
 processing = true;
 obs.disconnect();
 try {
@@ -4464,18 +4490,22 @@ setTimeout(bootByRoute, 2200);
 console.error('[LiaGold Suite] onRouteChange ERROR:', e);
 }
 }
-const originalPush = history.pushState;
-const originalReplace = history.replaceState;
-history.pushState = function (...args) {
-const res = originalPush.apply(this, args);
+function patchHistory() {
+const wrap = (fn, flag) => {
+if (fn && fn[flag]) return fn;
+const wrapped = function (...args) {
+const res = fn.apply(this, args);
 onRouteChange();
 return res;
 };
-history.replaceState = function (...args) {
-const res = originalReplace.apply(this, args);
-onRouteChange();
-return res;
+wrapped[flag] = true;
+return wrapped;
 };
+history.pushState = wrap(history.pushState, '__lgPushPatched');
+history.replaceState = wrap(history.replaceState, '__lgReplacePatched');
+}
+patchHistory();
+setInterval(patchHistory, 2000);
 addEventListener('popstate', onRouteChange);
 addEventListener('hashchange', onRouteChange);
 setInterval(onRouteChange, 900);
