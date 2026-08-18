@@ -6,7 +6,7 @@ Userscript Tampermonkey untuk [liagold.cuan.co](https://liagold.cuan.co):
 - **Module 2** — Footer total kolom di halaman ERP lain
 - **Module 3** — Totalizer (klik-jumlahkan angka) + Scanner stock opname (solo/multiplayer)
 
-File utama: [`liagold-suite.user.js`](./liagold-suite.user.js) (v1.0.25).
+File utama: [`liagold-suite.user.js`](./liagold-suite.user.js).
 
 ## Install
 
@@ -27,3 +27,5 @@ Jangan merge fix tanpa issue yang merujuk root cause. Beberapa bug cache saling 
 ## Keamanan
 
 Script ini berisi URL Firebase RTDB dan domain ERP internal. Jangan jadikan repo public tanpa meninjau ulang rules Firebase dan data yang tersimpan di client.
+
+Rules yang disarankan: [`docs/firebase-rules.md`](./docs/firebase-rules.md).

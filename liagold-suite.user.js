@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.34
-// @description  v1.0.34: remaining important — scanner storage/price/stats + scoped payment cache + clean NI map
+// @version      1.0.35
+// @description  v1.0.35: medium issues — cache hygiene, tray load, pending queue, crypto session, no TTL auto-delete
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -176,8 +176,32 @@ const LG = {
     }
     return LG.parseIdNumber(item.SellingPriceDisplay || item.Price || 0);
   },
+  parsePendingQueue(raw) {
+    if (raw == null) return [];
+    try {
+      const val = JSON.parse(raw);
+      if (!Array.isArray(val)) return [];
+      return val.filter((x) => x && typeof x === 'object' && x.codeProduct);
+    } catch (e) {
+      return [];
+    }
+  },
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
+  },
+  nextPaymentLookupPage({ found, pageNumber, itemCount, pageSize, maxPages }) {
+    if (found) return null;
+    if (itemCount < pageSize) return null;
+    if (pageNumber + 1 >= maxPages) return null;
+    return pageNumber + 1;
+  },
+  randomBase36(length) {
+    const alphabet = '0123456789abcdefghijklmnopqrstuvwxyz';
+    const bytes = new Uint8Array(length);
+    crypto.getRandomValues(bytes);
+    let out = '';
+    for (let i = 0; i < length; i++) out += alphabet[bytes[i] % 36];
+    return out;
   },
   buildNiLookupUrl(origin, path, filter, pageSize, pageNumber) {
     if (pageNumber == null) pageNumber = 0;
@@ -265,10 +289,14 @@ const LG = {
       if (!raw) return {};
 
       const obj = JSON.parse(raw);
-      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+        localStorage.removeItem(STORAGE_KEY);
+        return {};
+      }
 
       return obj;
     } catch (e) {
+      try { localStorage.removeItem(STORAGE_KEY); } catch (e2) {}
       return {};
     }
   }
@@ -353,6 +381,16 @@ const LG = {
 
   function setNiCodeEmpty(id) {
     niCodeEmpty.set(id, Date.now());
+  }
+
+  function pruneNegativeCache(now) {
+    if (now == null) now = Date.now();
+    for (const [k, ts] of tempEmpty) {
+      if (now - ts >= TEMP_EMPTY_TTL) tempEmpty.delete(k);
+    }
+    for (const [k, ts] of niCodeEmpty) {
+      if (now - ts >= TEMP_EMPTY_TTL) niCodeEmpty.delete(k);
+    }
   }
 
   function domWrite(fn) {
@@ -703,12 +741,14 @@ const LG = {
     return sums;
   }
 
-  function buildApiUrl(filter) {
+  function buildApiUrl(filter, pageNumber, pageSize) {
+    if (pageNumber == null) pageNumber = 0;
+    if (pageSize == null) pageSize = 50;
     const params = new URLSearchParams({
       sortOrder: 'desc',
       sortField: 'id',
-      pageNumber: '0',
-      pageSize: '20',
+      pageNumber: String(pageNumber),
+      pageSize: String(pageSize),
       startIndexCustom: '-1',
       generalFilter: filter
     });
@@ -717,8 +757,10 @@ const LG = {
   }
 
   // List pembelian non-invoice (punya PaymentMethodName/TotalPurchase, format sama /web/purchasing)
-  function buildNonInvoicePaymentUrl(filter) {
-    return LG.buildNiLookupUrl(window.location.origin, '/web/purchasing/non-invoice', filter, 20, 0);
+  function buildNonInvoicePaymentUrl(filter, pageNumber, pageSize) {
+    if (pageNumber == null) pageNumber = 0;
+    if (pageSize == null) pageSize = 50;
+    return LG.buildNiLookupUrl(window.location.origin, '/web/purchasing/non-invoice', filter, pageSize, pageNumber);
   }
 
   function runFetchQueue() {
@@ -802,14 +844,31 @@ const LG = {
 
     const promise = (async () => {
       try {
-        let json = await fetchJson(build(code));
-        let item = findExactItem(json, code);
+        const pageSize = 50;
+        const maxPages = 5;
+        let json = null;
+        let item = null;
+        let page = 0;
+        while (true) {
+          json = await fetchJson(build(code, page, pageSize));
+          item = findExactItem(json, code);
+          const n = ((json && json.items) || []).length;
+          const next = LG.nextPaymentLookupPage({
+            found: !!item,
+            pageNumber: page,
+            itemCount: n,
+            pageSize,
+            maxPages
+          });
+          if (item || next == null) break;
+          page = next;
+        }
 
         if (!item) {
           const digits = code.replace(/\D/g, '');
 
           if (digits && digits !== code) {
-            json = await fetchJson(build(digits));
+            json = await fetchJson(build(digits, 0, pageSize));
             item = findExactItem(json, code);
           }
         }
@@ -1512,6 +1571,8 @@ const LG = {
     }
     if (!LG.isPaymentInjectPage(location.pathname)) return;
 
+    pruneNegativeCache();
+
     try {
       injectStyle();
 
@@ -1554,6 +1615,9 @@ const LG = {
     if (e.key === STORAGE_KEY) {
       storageCache = loadStorageCache();
       memCache.clear();
+      tempEmpty.clear();
+      niCodeEmpty.clear();
+      pruneNegativeCache();
       scheduleUpdate(100);
     }
   });
@@ -2404,7 +2468,7 @@ rebuildScannedCodes();
 let sessionId = localStorage.getItem('lg_session') || null;
 let myName = localStorage.getItem('lg_mp_name') || '';
 let myId = localStorage.getItem('lg_mp_id') || (() => {
-const id = 'u' + Math.random().toString(36).substr(2, 8);
+const id = 'u' + LG.randomBase36(8);
 localStorage.setItem('lg_mp_id', id);
 return id;
 })();
@@ -2430,6 +2494,16 @@ let scanQueue = [];
 let isScanning = false;
 let pendingLocalScans = new Set();
 let pendingCloudPushes = [];
+const PENDING_KEY = 'lg_pendingCloudPushes';
+function persistPendingPushes() {
+try {
+if (!pendingCloudPushes.length) {
+localStorage.removeItem(PENDING_KEY);
+return;
+}
+localStorage.setItem(PENDING_KEY, JSON.stringify(pendingCloudPushes));
+} catch (e) {}
+}
 let retryTimer = null;
 let audioCtx = null;
 let renderThrottleTimer = null;
@@ -2524,6 +2598,9 @@ if (scanLog.length === 0) return;
 updateStatus('🗑️ Data scan expired (>12 jam). Menghapus otomatis...');
 scanLog = [];
 scannedCodes = new Set();
+formFilledCodes = new Set();
+formAttemptCounts = new Map();
+formQueue = [];
 localStorage.removeItem('lg_scanLog');
 localStorage.removeItem('lg_lastScanAt');
 lastScanAt = null;
@@ -2538,13 +2615,11 @@ if (!sessionId || isDeletingSession) return;
 if (!expiryReady || !LG.isDataExpired(lastScanAt)) return;
 isDeletingSession = true;
 try {
-updateStatus('🗑️ Data scan expired (>12 jam). Menghapus sesi dari cloud...');
-const res = await fetch(`${FIREBASE}/opname/${sessionId}.json`, { method: 'DELETE' });
-if (!res.ok) throw new Error(`HTTP ${res.status}`);
+persistScanLog();
+stopCountdownInterval();
 cleanupSessionLocal();
-alert('⏰ Data scan telah EXPIRED (>12 jam tanpa scan).\nSesi telah dihapus otomatis dari cloud.\nSemua peserta telah keluar.\nBuat sesi baru untuk melanjutkan.');
-} catch (e) {
-updateStatus('❌ Gagal hapus sesi expired: ' + e.message);
+updateStatus('⏰ Sesi expired di device ini. Data cloud tidak dihapus otomatis.');
+alert('⏰ Data scan sudah lewat 12 jam tanpa scan di device ini.\nKamu keluar ke mode solo.\nSesi cloud tidak dihapus otomatis — pakai “Selesai & Hapus” jika semua sudah selesai.');
 } finally {
 isDeletingSession = false;
 }
@@ -2628,7 +2703,16 @@ group: item.GroupCode || '',
 }
 function rebuildProductMap() {
 productMap = new Map();
-allProducts.forEach(p => productMap.set(String(p.codeProduct).toLowerCase(), p));
+let dupes = 0;
+allProducts.forEach(p => {
+const k = String(p.codeProduct).toLowerCase();
+if (productMap.has(k)) {
+dupes++;
+return;
+}
+productMap.set(k, p);
+});
+if (dupes > 0) updateStatus(`⚠️ ${dupes} codeProduct duplikat, dipakai entri pertama`);
 }
 function injectStyles() {
 const existingStyle = document.getElementById('lg-styles');
@@ -2896,6 +2980,7 @@ return;
 if (i === retries - 1) {
 updateStatus('⚠️ Gagal kirim ke cloud setelah ' + retries + 'x. Data di-queue.');
 pendingCloudPushes.push({ ...entry, uniqueKey });
+persistPendingPushes();
 scheduleRetryPush();
 } else {
 await sleep(400 * (i + 1));
@@ -2922,6 +3007,7 @@ pendingCloudPushes.push(entry);
 }
 await sleep(200);
 }
+persistPendingPushes();
 if (pendingCloudPushes.length) scheduleRetryPush();
 }, 5000);
 }
@@ -2992,7 +3078,7 @@ async function createSession() {
 const nama = document.getElementById('lg-mp-name').value.trim() || 'Anonim';
 myName = nama;
 localStorage.setItem('lg_mp_name', nama);
-const code = Math.random().toString(36).substr(2, 6).toUpperCase();
+const code = LG.randomBase36(8).toUpperCase();
 const now = new Date().toISOString();
 try {
 await fbPut(`/opname/${code}/meta`, {
@@ -3018,6 +3104,7 @@ formQueue = [];
 formRetryCount = 0;
 pendingLocalScans = new Set();
 pendingCloudPushes = [];
+persistPendingPushes();
 statusFilter = 'none';
 await migrateSoloScansToSession();
 listenSession();
@@ -3066,6 +3153,7 @@ formQueue = [];
 formRetryCount = 0;
 pendingLocalScans = new Set();
 pendingCloudPushes = [];
+persistPendingPushes();
 statusFilter = 'none';
 await migrateSoloScansToSession();
 listenSession();
@@ -3105,6 +3193,7 @@ formQueue = [];
 formRetryCount = 0;
 pendingLocalScans = new Set();
 pendingCloudPushes = [];
+try { localStorage.removeItem(PENDING_KEY); } catch (e) {}
 esFailCount = 0;
 statusFilter = 'none';
 if (retryTimer) {
@@ -3165,6 +3254,7 @@ persistScanLog();
 }
 window.addEventListener('beforeunload', () => {
 if (scanLog.length) persistScanLog();
+if (pendingCloudPushes.length) persistPendingPushes();
 });
 async function verifySessionAlive() {
 if (!sessionId || isDeletingSession) return;
@@ -3636,7 +3726,7 @@ isLoading = false;
 async function loadTrayData(trayId) {
 const myLoadId = ++currentLoadId;
 isLoading = true;
-allProducts = [];
+const tmp = [];
 let page = 0;
 const isAll = trayId === 'all';
 const label = isAll ? 'Semua Baki' : `Baki ${trayId}`;
@@ -3645,26 +3735,28 @@ while (true) {
 const url = isAll
 ? `${API_STOCK}&pageNumber=${page}&pageSize=${PAGE_SIZE}`
 : `${API_STOCK}&trayFilter=${trayId}&pageNumber=${page}&pageSize=${PAGE_SIZE}`;
-updateStatus(`⏳ ${label}… hal ${page + 1} (${allProducts.length})`);
+updateStatus(`⏳ ${label}… hal ${page + 1} (${tmp.length})`);
 const res = await fetch(url);
 if (!res.ok) throw new Error(`HTTP ${res.status}`);
 const items = (await res.json()).items || [];
 if (!items.length) break;
 if (myLoadId !== currentLoadId) return;
-items.forEach(i => allProducts.push(mapItem(i)));
+items.forEach(i => tmp.push(mapItem(i)));
 if (items.length < PAGE_SIZE) break;
 page++;
 await sleep(300);
 if (myLoadId !== currentLoadId) return;
 }
 if (myLoadId !== currentLoadId) return;
+allProducts = tmp;
 rebuildProductMap();
 applyFilters();
 updateStatus(`✅ ${label}: ${allProducts.length} produk dimuat`);
 } catch (e) {
 if (myLoadId !== currentLoadId) return;
 updateStatus(`⚠️ Gagal: ${e.message}`);
-if (allProducts.length) {
+if (tmp.length) {
+allProducts = tmp;
 rebuildProductMap();
 applyFilters();
 }
@@ -4493,6 +4585,8 @@ startCountdownInterval();
 if (isMulti()) {
 listenSession();
 checkSessionExpiry();
+pendingCloudPushes = LG.parsePendingQueue(localStorage.getItem(PENDING_KEY));
+if (pendingCloudPushes.length) scheduleRetryPush();
 updateStatus(`🟢 Menyambung ke sesi ${sessionId}…`);
 }
 if (trayList.length) {
