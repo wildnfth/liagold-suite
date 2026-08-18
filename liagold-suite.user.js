@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.33
-// @description  v1.0.33: scanner storage integrity, id-ID product price, Sudah Discan from log
+// @version      1.0.34
+// @description  v1.0.34: remaining important — scanner storage/price/stats + scoped payment cache + clean NI map
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -178,6 +178,18 @@ const LG = {
   },
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
+  },
+  buildNiLookupUrl(origin, path, filter, pageSize, pageNumber) {
+    if (pageNumber == null) pageNumber = 0;
+    const url = new URL(path, origin);
+    url.search = '';
+    url.searchParams.set('sortOrder', 'desc');
+    url.searchParams.set('sortField', 'id');
+    url.searchParams.set('pageNumber', String(pageNumber));
+    url.searchParams.set('pageSize', String(pageSize));
+    url.searchParams.set('startIndexCustom', '-1');
+    url.searchParams.set('generalFilter', filter == null ? '' : String(filter));
+    return url.toString();
   }
 };
 
@@ -235,8 +247,6 @@ const LG = {
   const niCodeCache = new Map();
   const niCodeEmpty = new Map();
   const niCodeInflight = new Map();
-  let niApiTemplate = '';
-  let niPayApiTemplate = '';
 
   const fetchQueue = [];
   let activeFetch = 0;
@@ -708,28 +718,7 @@ const LG = {
 
   // List pembelian non-invoice (punya PaymentMethodName/TotalPurchase, format sama /web/purchasing)
   function buildNonInvoicePaymentUrl(filter) {
-    if (niPayApiTemplate) {
-      try {
-        const url = new URL(niPayApiTemplate, window.location.origin);
-        url.searchParams.set('generalFilter', filter);
-        url.searchParams.set('pageNumber', '0');
-        url.searchParams.set('pageSize', '20');
-        return url.toString();
-      } catch (e) {
-        // fallback ke URL rakitan di bawah
-      }
-    }
-
-    const params = new URLSearchParams({
-      sortOrder: 'desc',
-      sortField: 'id',
-      pageNumber: '0',
-      pageSize: '20',
-      startIndexCustom: '-1',
-      generalFilter: filter
-    });
-
-    return `${window.location.origin}/web/purchasing/non-invoice?${params.toString()}`;
+    return LG.buildNiLookupUrl(window.location.origin, '/web/purchasing/non-invoice', filter, 20, 0);
   }
 
   function runFetchQueue() {
@@ -853,22 +842,29 @@ const LG = {
 
   // ===== Non-invoice: Id baris -> Code PC -> pembayaran =====
 
-  function buildNonInvoiceUrl(filter, pageSize) {
-    let url;
+  function buildNonInvoiceUrl(filter, pageSize, pageNumber) {
+    return LG.buildNiLookupUrl(
+      location.origin,
+      '/web/purchasing/detail-non-invoice',
+      filter,
+      pageSize,
+      pageNumber == null ? 0 : pageNumber
+    );
+  }
 
-    try {
-      url = new URL(
-        niApiTemplate || `${location.origin}/web/purchasing/detail-non-invoice`,
-        location.origin
-      );
-    } catch (e) {
-      url = new URL(`${location.origin}/web/purchasing/detail-non-invoice`);
+  function getNiCode(id) {
+    const hit = niCodeCache.get(String(id));
+    if (!hit) return '';
+    if (typeof hit === 'string') return hit;
+    if (!LG.isPaymentCacheFresh(hit)) {
+      niCodeCache.delete(String(id));
+      return '';
     }
+    return hit.c || '';
+  }
 
-    url.searchParams.set('generalFilter', filter);
-    url.searchParams.set('pageNumber', '0');
-    url.searchParams.set('pageSize', String(pageSize));
-    return url.toString();
+  function setNiCode(id, code) {
+    niCodeCache.set(String(id), { c: code, t: Date.now() });
   }
 
   function rememberNiItems(json) {
@@ -880,7 +876,7 @@ const LG = {
       const id = String(item.Id);
       const code = String(item.Code).trim().toUpperCase();
 
-      if (code) niCodeCache.set(id, code);
+      if (code) setNiCode(id, code);
     });
   }
 
@@ -897,19 +893,25 @@ const LG = {
   // Fallback: tarik list non-invoice sekali (pageSize besar) buat petakan Id -> Code
   function ensureNiBulk() {
     if (niBulkPromise) return niBulkPromise;
-    if (Date.now() < niBulkCooldown) return Promise.resolve();
+    if (Date.now() < niBulkCooldown) return Promise.resolve(false);
 
-    niBulkPromise = fetchJson(buildNonInvoiceUrl('', 500))
-      .then((json) => {
-        rememberNiItems(json);
+    niBulkPromise = (async () => {
+      try {
+        for (let page = 0; page < 10; page++) {
+          const json = await fetchJson(buildNonInvoiceUrl('', 500, page));
+          rememberNiItems(json);
+          const n = ((json && json.items) || []).length;
+          if (n < 500) break;
+        }
         niBulkCooldown = Date.now() + 60 * 1000;
-      })
-      .catch(() => {
+        return true;
+      } catch (e) {
         niBulkCooldown = Date.now() + 60 * 1000;
-      })
-      .finally(() => {
+        return false;
+      } finally {
         niBulkPromise = null;
-      });
+      }
+    })();
 
     return niBulkPromise;
   }
@@ -917,7 +919,8 @@ const LG = {
   function resolveNonInvoiceCode(id) {
     const key = String(id);
 
-    if (niCodeCache.has(key)) return Promise.resolve(niCodeCache.get(key));
+    const existing = getNiCode(key);
+    if (existing) return Promise.resolve(existing);
     if (niCodeInflight.has(key)) return niCodeInflight.get(key);
     if (isNiCodeEmpty(key)) return Promise.resolve('');
 
@@ -934,13 +937,10 @@ const LG = {
         }
 
         if (!item) {
-          await ensureNiBulk();
-
-          if (niCodeCache.has(key)) return niCodeCache.get(key);
-        }
-
-        if (!item) {
-          setNiCodeEmpty(key);
+          const bulkOk = await ensureNiBulk();
+          const mapped = getNiCode(key);
+          if (mapped) return mapped;
+          if (bulkOk) setNiCodeEmpty(key);
           return '';
         }
 
@@ -951,7 +951,7 @@ const LG = {
           return '';
         }
 
-        niCodeCache.set(key, code);
+        setNiCode(key, code);
         return code;
       } catch (e) {
         return '';
@@ -985,15 +985,6 @@ const LG = {
 
         // Hanya list detail yang dipetakan Id -> Code (ruang Id-nya beda dengan list pembayaran)
         if (isDetail) rememberNiItems(json);
-
-        const u = new URL(url, location.origin);
-        if (!(u.searchParams.get('generalFilter') || '').trim()) {
-          if (isDetail) {
-            niApiTemplate = url;
-          } else {
-            niPayApiTemplate = url;
-          }
-        }
       } catch (e) {
         // ignore
       }
@@ -1380,7 +1371,7 @@ const LG = {
       const id = getRowId(row);
       if (!id) return;
 
-      const mapped = niCodeCache.get(id);
+      const mapped = getNiCode(id);
 
       if (mapped) {
         const cached = getCache(mapped, true);
@@ -1504,6 +1495,7 @@ const LG = {
   }
 
   function stripPurchasingInjects() {
+    niCodeCache.clear();
     document.querySelectorAll(
       'th.gold-pay-method-header, td.gold-pay-method, th.gold-pay-amount-header, td.gold-pay-amount'
     ).forEach((el) => el.remove());
