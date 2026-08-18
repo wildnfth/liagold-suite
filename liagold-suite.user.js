@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.29
-// @description  v1.0.29: Metode Bayar only — drop injected Total Bayar column and footer sum
+// @version      1.0.31
+// @description  v1.0.31: form-fill integrity + payment cache TTL 30m, no error/empty persist
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -15,7 +15,7 @@
 if (window.__lgUltimateSuite) return;
 window.__lgUltimateSuite = true;
 
-// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js, lib/payment-page.js
+// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js, lib/payment-page.js, lib/form-fill-policy.js, lib/payment-cache-policy.js
 // Keep bodies identical.
 const LG = {
   DATA_TTL_MS: 12 * 60 * 60 * 1000,
@@ -90,6 +90,42 @@ const LG = {
   },
   isPurchasingFamilyChild(pathname) {
     return /^\/purchasing-non-invoice\/.+/.test(pathname) || /^\/purchasing\/.+/.test(pathname);
+  },
+  MAX_FORM_CODE_ATTEMPTS: 3,
+  recordFormAttempt(attempts, code, success, maxAttempts) {
+    if (maxAttempts == null) maxAttempts = LG.MAX_FORM_CODE_ATTEMPTS;
+    const lc = String(code || '').toLowerCase();
+    if (success) {
+      attempts.delete(lc);
+      return { markFilled: true, retry: false, giveUp: false };
+    }
+    const n = (attempts.get(lc) || 0) + 1;
+    attempts.set(lc, n);
+    if (n >= maxAttempts) {
+      return { markFilled: false, retry: false, giveUp: true };
+    }
+    return { markFilled: false, retry: true, giveUp: false };
+  },
+  PAYMENT_CACHE_TTL_MS: 30 * 60 * 1000,
+  TEMP_EMPTY_TTL_MS: 60 * 1000,
+  isPaymentCacheFresh(entry, now, ttlMs) {
+    if (now == null) now = Date.now();
+    if (ttlMs == null) ttlMs = LG.PAYMENT_CACHE_TTL_MS;
+    if (!entry || !Number.isFinite(entry.t)) return false;
+    return now - entry.t <= ttlMs;
+  },
+  isEmptyPayment(value) {
+    if (!value) return true;
+    const method = String(value.m ?? '').trim();
+    const amount = Number(value.a) || 0;
+    const methodEmpty = method === '' || method === '-';
+    return methodEmpty && amount === 0;
+  },
+  classifyPaymentFetch({ networkError, itemFound, value }) {
+    if (networkError) return 'none';
+    if (!itemFound) return 'tempEmpty';
+    if (LG.isEmptyPayment(value)) return 'tempEmpty';
+    return 'persist';
   }
 };
 
@@ -182,29 +218,43 @@ const LG = {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(storageCache));
       } catch (e) {
-        // ignore
+        const now = Date.now();
+        Object.keys(storageCache).forEach((k) => {
+          if (!LG.isPaymentCacheFresh(storageCache[k], now)) delete storageCache[k];
+        });
+        const keys = Object.keys(storageCache).sort(
+          (a, b) => (storageCache[a].t || 0) - (storageCache[b].t || 0)
+        );
+        keys.slice(0, Math.ceil(keys.length / 2)).forEach((k) => delete storageCache[k]);
+        memCache.clear();
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(storageCache));
+        } catch (e2) {
+          // ignore
+        }
       }
     }, 200);
   }
 
   function getCache(code) {
-    if (memCache.has(code)) {
-      return memCache.get(code);
-    }
-
     const stored = storageCache[code];
-
-    if (stored) {
-      const val = {
-        m: typeof stored.m === 'string' ? stored.m : '-',
-        a: Number(stored.a) || 0
-      };
-
-      memCache.set(code, val);
-      return val;
+    if (!stored || !LG.isPaymentCacheFresh(stored)) {
+      if (stored) {
+        delete storageCache[code];
+        memCache.delete(code);
+        saveStorageCache();
+      } else {
+        memCache.delete(code);
+      }
+      return null;
     }
 
-    return null;
+    const val = {
+      m: typeof stored.m === 'string' ? stored.m : '-',
+      a: Number(stored.a) || 0
+    };
+    memCache.set(code, val);
+    return val;
   }
 
   function setCache(code, value) {
@@ -717,7 +767,8 @@ const LG = {
         }
 
         if (!item) {
-          setTempEmpty(code);
+          const kind = LG.classifyPaymentFetch({ networkError: false, itemFound: false, value: null });
+          if (kind === 'tempEmpty') setTempEmpty(code);
           return { m: '', a: 0 };
         }
 
@@ -726,10 +777,11 @@ const LG = {
           a: parseApiAmount(item.TotalPurchase)
         };
 
-        setCache(code, value);
-        return value;
+        const kind = LG.classifyPaymentFetch({ networkError: false, itemFound: true, value });
+        if (kind === 'persist') setCache(code, value);
+        else if (kind === 'tempEmpty') setTempEmpty(code);
+        return kind === 'persist' ? value : { m: value.m || '', a: value.a || 0 };
       } catch (err) {
-        setTempEmpty(code);
         return { m: '', a: 0 };
       } finally {
         inflight.delete(code);
@@ -843,7 +895,6 @@ const LG = {
         niCodeCache.set(key, code);
         return code;
       } catch (e) {
-        setNiCodeEmpty(key);
         return '';
       } finally {
         niCodeInflight.delete(key);
@@ -2301,6 +2352,7 @@ let formQueue = [];
 let isProcessingForm = false;
 let isStoppingForm = false;
 let formFilledCodes = new Set();
+let formAttemptCounts = new Map();
 let formRetryCount = 0;
 let formRetryTimer = null;
 let panelVisible = false;
@@ -2683,6 +2735,7 @@ isStoppingForm = false;
 formRetryCount = 0;
 let processed = 0;
 let batchCount = 0;
+let exitedEarly = false;
 const totalItems = formQueue.length;
 try {
 while (formQueue.length) {
@@ -2717,6 +2770,7 @@ formRetryTimer = null;
 processFormQueue();
 }, 3000);
 }
+exitedEarly = true;
 return;
 }
 if (isCodeInForm(code)) {
@@ -2724,22 +2778,35 @@ formFilledCodes.add(lc);
 continue;
 }
 const beforeSig = getFormCounters();
-if (fillCodeProductToForm(code)) {
+const filled = fillCodeProductToForm(code);
+let changed = false;
+if (filled) {
 await sleep(150);
 clickSearchBtn();
-await waitForFormChange(beforeSig, 6000);
+changed = await waitForFormChange(beforeSig, 6000);
 }
+const success = changed || isCodeInForm(code);
+const decision = LG.recordFormAttempt(formAttemptCounts, lc, success);
+if (decision.markFilled) {
 formFilledCodes.add(lc);
 processed++;
 batchCount++;
+} else if (decision.retry) {
+formQueue.push(code);
+updateStatus(`⚠️ Gagal input ${code}. Retry ${formAttemptCounts.get(lc)}/${LG.MAX_FORM_CODE_ATTEMPTS}…`);
+} else {
+updateStatus(`⚠️ Gagal input ${code} setelah ${LG.MAX_FORM_CODE_ATTEMPTS}x. Dilewati.`);
+}
 await sleep(50);
 }
 } finally {
 isProcessingForm = false;
 isStoppingForm = false;
 }
-if (processed > 0 && !isStoppingForm) {
+if (processed > 0 && !isStoppingForm && !exitedEarly && formQueue.length === 0) {
 updateStatus(`✅ ${processed} kode berhasil diinput ke form.`);
+} else if (exitedEarly && processed > 0) {
+updateStatus(`⏸️ ${processed} kode terinput. Form hilang, sisa di-retry.`);
 }
 }
 async function fbPut(path, data) {
@@ -2878,6 +2945,7 @@ knownCloudKeys = new Set();
 initialCloudSyncDone = false;
 dupeCount = 0;
 formFilledCodes = new Set();
+formAttemptCounts = new Map();
 formQueue = [];
 formRetryCount = 0;
 pendingLocalScans = new Set();
@@ -2925,6 +2993,7 @@ knownCloudKeys = new Set();
 initialCloudSyncDone = false;
 dupeCount = 0;
 formFilledCodes = new Set();
+formAttemptCounts = new Map();
 formQueue = [];
 formRetryCount = 0;
 pendingLocalScans = new Set();
@@ -2963,6 +3032,7 @@ dupeCount = 0;
 knownCloudKeys = new Set();
 initialCloudSyncDone = false;
 formFilledCodes = new Set();
+formAttemptCounts = new Map();
 formQueue = [];
 formRetryCount = 0;
 pendingLocalScans = new Set();
@@ -4037,6 +4107,7 @@ fetch(`${FIREBASE}/opname/${sessionId}/dupes.json`, { method: 'DELETE' });
 pendingLocalScans = new Set();
 knownCloudKeys = new Set();
 formFilledCodes = new Set();
+formAttemptCounts = new Map();
 formQueue = [];
 formRetryCount = 0;
 initialCloudSyncDone = false;
@@ -4050,6 +4121,7 @@ if (!confirm('Reset semua progress scan?')) return;
 scanLog = [];
 scannedCodes = new Set();
 formFilledCodes = new Set();
+formAttemptCounts = new Map();
 formQueue = [];
 statusFilter = 'none';
 localStorage.removeItem('lg_scanLog');
