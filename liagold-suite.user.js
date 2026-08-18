@@ -359,6 +359,16 @@ const LG = {
     niCodeEmpty.set(id, Date.now());
   }
 
+  function pruneNegativeCache(now) {
+    if (now == null) now = Date.now();
+    for (const [k, ts] of tempEmpty) {
+      if (now - ts >= TEMP_EMPTY_TTL) tempEmpty.delete(k);
+    }
+    for (const [k, ts] of niCodeEmpty) {
+      if (now - ts >= TEMP_EMPTY_TTL) niCodeEmpty.delete(k);
+    }
+  }
+
   function domWrite(fn) {
     suppressObserver = true;
 
@@ -1516,6 +1526,8 @@ const LG = {
     }
     if (!LG.isPaymentInjectPage(location.pathname)) return;
 
+    pruneNegativeCache();
+
     try {
       injectStyle();
 
@@ -1558,6 +1570,9 @@ const LG = {
     if (e.key === STORAGE_KEY) {
       storageCache = loadStorageCache();
       memCache.clear();
+      tempEmpty.clear();
+      niCodeEmpty.clear();
+      pruneNegativeCache();
       scheduleUpdate(100);
     }
   });
