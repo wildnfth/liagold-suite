@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.32
-// @description  v1.0.32: totalizer full money tokens, stable selection, bubble clicks, reschedule wrap, history re-hook
+// @version      1.0.33
+// @description  v1.0.33: scanner storage integrity, id-ID product price, Sudah Discan from log
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -168,6 +168,13 @@ const LG = {
       set.add(String(row.codeProduct).toLowerCase());
     }
     return [...set];
+  },
+  pickProductPrice(item) {
+    if (!item || typeof item !== 'object') return 0;
+    for (const key of ['SellingPrice', 'Price', 'SellingPriceValue']) {
+      if (typeof item[key] === 'number' && Number.isFinite(item[key])) return item[key];
+    }
+    return LG.parseIdNumber(item.SellingPriceDisplay || item.Price || 0);
   }
 };
 
@@ -2609,7 +2616,7 @@ code: item.Code || '',
 name: item.Name || '',
 size: item.Size || '-',
 weight: item.WeightReal || item.WeightSystem || 0,
-price: item.SellingPriceDisplay || '0',
+price: LG.pickProductPrice(item),
 image: item.ProductPicture || '',
 kadar: item.Kadar || '',
 trayId: item.TrayId ?? null,
@@ -3726,7 +3733,7 @@ code: item.Code || '-',
 name: item.Name || '',
 fullName: item.FullName || '',
 weight: item.WeightReal || item.WeightSystem || 0,
-price: item.SellingPriceDisplay || item.Price || '0',
+price: LG.pickProductPrice(item),
 image: item.ProductPicture || '',
 kadar: item.Kadar || '',
 trayCode: item.TrayCode || '-',
@@ -3952,7 +3959,7 @@ const progress = allProducts.filter(p => scannedCodes.has(String(p.codeProduct).
 const sisa = total - progress;
 const pct = total ? Math.round(progress / total * 100) : 0;
 const cnt = l => scanLog.filter(x => x.status === l).length;
-const sudah = isMulti() ? dupeCount : cnt('SUDAH DISCAN');
+const sudah = cnt('SUDAH DISCAN');
 const cards = [
 { l: 'Data In-Stock', v: total, c: '#1e293b' },
 { l: 'Total Scan', v: scanLog.length, c: '#1e293b' },
