@@ -43,6 +43,44 @@ const LG = {
     const cp = String(codeProduct || '').toLowerCase();
     const ts = String(timestamp || '');
     return LG.sanitizeKey(cp + '_' + ts);
+  },
+  parseIdNumber(value) {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : 0;
+    }
+    if (value == null) return 0;
+    const original = String(value).trim();
+    if (!original) return 0;
+    const negative = /[-−]/.test(original);
+    let raw = original.replace(/[^\d.,]/g, '');
+    if (!raw) return 0;
+    const lastComma = raw.lastIndexOf(',');
+    const lastDot = raw.lastIndexOf('.');
+    const commaCount = (raw.match(/,/g) || []).length;
+    const dotCount = (raw.match(/\./g) || []).length;
+    if (lastComma !== -1 && lastDot !== -1) {
+      if (lastComma > lastDot) {
+        raw = raw.replace(/\./g, '').replace(',', '.');
+      } else {
+        raw = raw.replace(/,/g, '');
+      }
+    } else if (dotCount > 0 && commaCount === 0) {
+      if (dotCount > 1) {
+        raw = raw.replace(/\./g, '');
+      } else {
+        const frac = raw.length - lastDot - 1;
+        if (frac === 3) raw = raw.replace('.', '');
+      }
+    } else if (commaCount > 0 && dotCount === 0) {
+      if (commaCount > 1) {
+        raw = raw.replace(/,/g, '');
+      } else {
+        raw = raw.replace(',', '.');
+      }
+    }
+    const num = parseFloat(raw);
+    if (!Number.isFinite(num)) return 0;
+    return negative ? -Math.abs(num) : num;
   }
 };
 
@@ -358,22 +396,8 @@ const LG = {
       raw = String(raw).trim();
       if (!raw) return 0;
 
-      const isNegative = /[-−]/.test(raw) || !!cell.querySelector('.lgt-neg');
-
-      raw = raw.replace(/[^\d.,-]/g, '');
-      if (!raw) return 0;
-
-      if (raw.includes(',')) {
-        if (/,\d{3}(?:,|$)/.test(raw)) {
-          raw = raw.replace(/,/g, '');
-        } else {
-          raw = raw.replace(/,/g, '.');
-        }
-      }
-
-      const num = parseFloat(raw);
-      if (Number.isNaN(num)) return 0;
-
+      const isNegative = /[-−]/.test(String(raw)) || !!cell.querySelector('.lgt-neg');
+      const num = LG.parseIdNumber(raw);
       return isNegative ? -Math.abs(num) : num;
     } catch (e) {
       return 0;
@@ -381,29 +405,7 @@ const LG = {
   }
 
   function parseApiAmount(value) {
-    try {
-      if (typeof value === 'number') return value;
-      if (value == null) return 0;
-
-      let raw = String(value).trim();
-      if (!raw) return 0;
-
-      raw = raw.replace(/[^\d.,-]/g, '');
-      if (!raw) return 0;
-
-      if (raw.includes(',')) {
-        if (/,\d{3}(?:,|$)/.test(raw)) {
-          raw = raw.replace(/,/g, '');
-        } else {
-          raw = raw.replace(/,/g, '.');
-        }
-      }
-
-      const num = parseFloat(raw);
-      return Number.isNaN(num) ? 0 : num;
-    } catch (e) {
-      return 0;
-    }
+    return LG.parseIdNumber(value);
   }
 
   function isNonInvoicePage() {
@@ -1603,18 +1605,8 @@ let raw = dataValEl ? dataValEl.getAttribute('data-val') : cell.textContent;
 if (raw == null) return 0;
 raw = String(raw).trim();
 if (!raw) return 0;
-const isNegative = /[-−]/.test(raw) || !!cell.querySelector('.lgt-neg');
-raw = raw.replace(/[^\d.,-]/g, '');
-if (!raw) return 0;
-if (raw.includes(',')) {
-if (/,\d{3}(?:,|$)/.test(raw)) {
-raw = raw.replace(/,/g, '');
-} else {
-raw = raw.replace(/,/g, '.');
-}
-}
-const num = parseFloat(raw);
-if (Number.isNaN(num)) return 0;
+const isNegative = /[-−]/.test(String(raw)) || !!cell.querySelector('.lgt-neg');
+const num = LG.parseIdNumber(raw);
 return isNegative ? -Math.abs(num) : num;
 }
 const fmtMoney = (n) => {
