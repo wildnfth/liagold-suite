@@ -150,6 +150,24 @@ const LG = {
     const elapsed = now - lastProcessTime;
     if (elapsed >= minGapMs) return 0;
     return minGapMs - elapsed;
+  },
+  parseArrayJson(raw, fallback) {
+    if (raw == null) return fallback;
+    try {
+      const val = JSON.parse(raw);
+      return Array.isArray(val) ? val : fallback;
+    } catch (e) {
+      return fallback;
+    }
+  },
+  scannedCodesFromLog(scanLog) {
+    const set = new Set();
+    if (!Array.isArray(scanLog)) return [];
+    for (const row of scanLog) {
+      if (!row || row.status !== 'MASUK' || row.codeProduct == null || row.codeProduct === '') continue;
+      set.add(String(row.codeProduct).toLowerCase());
+    }
+    return [...set];
   }
 };
 
@@ -2348,17 +2366,32 @@ localStorage.removeItem(key);
 return fallback;
 }
 }
+function safeParseArray(key, fallback) {
+const raw = localStorage.getItem(key);
+if (raw === null) return fallback;
+const val = LG.parseArrayJson(raw, null);
+if (val === null) {
+console.warn('[LiaGold] localStorage bukan array:', key);
+localStorage.removeItem(key);
+return fallback;
+}
+return val;
+}
+function rebuildScannedCodes() {
+scannedCodes = new Set(LG.scannedCodesFromLog(scanLog));
+}
 let allProducts = [];
 let productMap = new Map();
 let filteredProducts = [];
-let trayList = safeParse('lg_trayList', []);
+let trayList = safeParseArray('lg_trayList', []);
 let selectedTray = 'all';
 let traySelected = false;
 let scanFilter = 'all';
 let statusFilter = 'none';
 let autoFillForm = true;
-let scanLog = safeParse('lg_scanLog', []);
-let scannedCodes = new Set(scanLog.filter(l => l.status === 'MASUK').map(l => String(l.codeProduct).toLowerCase()));
+let scanLog = safeParseArray('lg_scanLog', []);
+let scannedCodes = new Set();
+rebuildScannedCodes();
 let sessionId = localStorage.getItem('lg_session') || null;
 let myName = localStorage.getItem('lg_mp_name') || '';
 let myId = localStorage.getItem('lg_mp_id') || (() => {
@@ -3075,8 +3108,8 @@ formRetryTimer = null;
 }
 stopCountdownInterval();
 localStorage.removeItem('lg_session');
-scanLog = safeParse('lg_scanLog', []);
-scannedCodes = new Set(scanLog.filter(l => l.status === 'MASUK').map(l => String(l.codeProduct).toLowerCase()));
+scanLog = safeParseArray('lg_scanLog', []);
+rebuildScannedCodes();
 updateMpUI();
 updateStats();
 renderLog();
@@ -3101,13 +3134,16 @@ isDeletingSession = false;
 }
 }
 function persistScanLog() {
+if (isMulti()) return;
 try {
 if (scanLog.length > MAX_SCAN_LOG) scanLog = scanLog.slice(0, MAX_SCAN_LOG);
 localStorage.setItem('lg_scanLog', JSON.stringify(scanLog));
+rebuildScannedCodes();
 } catch (e) {
 try {
 scanLog = scanLog.slice(0, 500);
 localStorage.setItem('lg_scanLog', JSON.stringify(scanLog));
+rebuildScannedCodes();
 } catch (e2) {}
 }
 }
