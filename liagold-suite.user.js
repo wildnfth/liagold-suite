@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.31
-// @description  v1.0.31: form-fill integrity + payment cache TTL 30m, no error/empty persist
+// @version      1.0.32
+// @description  v1.0.32: totalizer full money tokens, stable selection, bubble clicks, reschedule wrap, history re-hook
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -4490,18 +4490,22 @@ setTimeout(bootByRoute, 2200);
 console.error('[LiaGold Suite] onRouteChange ERROR:', e);
 }
 }
-const originalPush = history.pushState;
-const originalReplace = history.replaceState;
-history.pushState = function (...args) {
-const res = originalPush.apply(this, args);
+function patchHistory() {
+const wrap = (fn, flag) => {
+if (fn && fn[flag]) return fn;
+const wrapped = function (...args) {
+const res = fn.apply(this, args);
 onRouteChange();
 return res;
 };
-history.replaceState = function (...args) {
-const res = originalReplace.apply(this, args);
-onRouteChange();
-return res;
+wrapped[flag] = true;
+return wrapped;
 };
+history.pushState = wrap(history.pushState, '__lgPushPatched');
+history.replaceState = wrap(history.replaceState, '__lgReplacePatched');
+}
+patchHistory();
+setInterval(patchHistory, 2000);
 addEventListener('popstate', onRouteChange);
 addEventListener('hashchange', onRouteChange);
 setInterval(onRouteChange, 900);
