@@ -35,6 +35,14 @@ const LG = {
     const remaining = LG.getRemainingTime(lastScanAt, now, ttlMs);
     if (remaining == null) return false;
     return remaining <= 0;
+  },
+  sanitizeKey(str) {
+    return String(str).replace(/[.#$\[\]/]/g, '_');
+  },
+  generateHistoryKey(codeProduct, timestamp) {
+    const cp = String(codeProduct || '').toLowerCase();
+    const ts = String(timestamp || '');
+    return LG.sanitizeKey(cp + '_' + ts);
   }
 };
 
@@ -2394,13 +2402,10 @@ let sessionCreatedAt = null;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const isMulti = () => !!sessionId;
 function sanitizeKey(str) {
-return String(str).replace(/[.#$\[\]\/]/g, '_');
+return LG.sanitizeKey(str);
 }
 function generateHistoryKey(codeProduct, timestamp) {
-const cp = String(codeProduct || '').toLowerCase();
-const ts = timestamp || new Date().toISOString();
-const rand = Math.random().toString(36).substr(2, 6);
-return sanitizeKey(cp + '_' + ts + '_' + rand);
+return LG.generateHistoryKey(codeProduct, timestamp);
 }
 function isEntryExpired(entry) {
 if (!entry || !entry.time) return false;
@@ -2884,8 +2889,8 @@ Object.keys(data2).forEach(k => existingKeys.add(k));
 const payload = {};
 let count = 0;
 byCode.forEach((l, k) => {
-const uniqueKey = generateHistoryKey(l.codeProduct, l.timeIso || l.time);
-if (existingKeys.has(uniqueKey)) return;
+const uniqueKey = generateHistoryKey(l.codeProduct, l.timeIso || '');
+if (!l.timeIso || existingKeys.has(uniqueKey)) return;
 payload[uniqueKey] = {
 by: myName,
 time: l.timeIso || new Date().toISOString(),
@@ -3133,9 +3138,8 @@ cloudHistory = data.history || {};
 if (data.scans) {
 Object.entries(data.scans).forEach(([k, v]) => {
 if (!v || !v.codeProduct) return;
-const uniqueKey = generateHistoryKey(v.codeProduct, v.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = v;
+if (!cloudHistory[k]) {
+cloudHistory[k] = v;
 }
 });
 }
@@ -3183,17 +3187,15 @@ const scansData = path === '/scans' ? data : null;
 if (scansData && typeof scansData === 'object') {
 Object.entries(scansData).forEach(([k, v]) => {
 if (!v || !v.codeProduct) return;
-const uniqueKey = generateHistoryKey(v.codeProduct, v.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = v;
+if (!cloudHistory[k]) {
+cloudHistory[k] = v;
 }
 });
 } else if (path.startsWith('/scans/')) {
 const k = path.slice('/scans/'.length);
 if (data && data.codeProduct) {
-const uniqueKey = generateHistoryKey(data.codeProduct, data.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = data;
+if (!cloudHistory[k]) {
+cloudHistory[k] = data;
 }
 }
 }
@@ -3242,9 +3244,8 @@ updateCountdownDisplay();
 if (k === 'scans' && v && typeof v === 'object') {
 Object.entries(v).forEach(([sk, sv]) => {
 if (!sv || !sv.codeProduct) return;
-const uniqueKey = generateHistoryKey(sv.codeProduct, sv.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = sv;
+if (!cloudHistory[sk]) {
+cloudHistory[sk] = sv;
 }
 });
 }
@@ -3288,9 +3289,8 @@ const scansData = path === '/scans' ? data : null;
 if (scansData && typeof scansData === 'object') {
 Object.entries(scansData).forEach(([k, v]) => {
 if (!v || !v.codeProduct) return;
-const uniqueKey = generateHistoryKey(v.codeProduct, v.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = v;
+if (!cloudHistory[k]) {
+cloudHistory[k] = v;
 }
 });
 } else if (path.startsWith('/scans/')) {
@@ -3300,9 +3300,8 @@ if (entryData && typeof entryData === 'object') {
 Object.entries(entryData).forEach(([subK, v]) => {
 if (v === null) return;
 if (!v.codeProduct) return;
-const uniqueKey = generateHistoryKey(v.codeProduct, v.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = v;
+if (!cloudHistory[subK]) {
+cloudHistory[subK] = v;
 }
 });
 }
@@ -3348,9 +3347,8 @@ cloudHistory = data.history || {};
 if (data.scans) {
 Object.entries(data.scans).forEach(([k, v]) => {
 if (!v || !v.codeProduct) return;
-const uniqueKey = generateHistoryKey(v.codeProduct, v.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = v;
+if (!cloudHistory[k]) {
+cloudHistory[k] = v;
 }
 });
 }
