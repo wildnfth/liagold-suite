@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.25
-// @description  v1.0.25: Unified Suite - Totalizer, Scanner, Payment Detail & ERP Footer (+ total bayar & jumlah transaksi di footer non-invoice)
+// @version      1.0.26
+// @description  v1.0.26: fix session expiry race, deterministic scan keys, id-ID parse, footer ignores totalizer
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -385,23 +385,8 @@ const LG = {
   }
 
   function parseCell(cell) {
-    try {
-      if (!cell) return 0;
-
-      const dataValEl = cell.querySelector('[data-val]');
-      let raw = dataValEl ? dataValEl.getAttribute('data-val') : cell.textContent;
-
-      if (raw == null) return 0;
-
-      raw = String(raw).trim();
-      if (!raw) return 0;
-
-      const isNegative = /[-−]/.test(String(raw)) || !!cell.querySelector('.lgt-neg');
-      const num = LG.parseIdNumber(raw);
-      return isNegative ? -Math.abs(num) : num;
-    } catch (e) {
-      return 0;
-    }
+    if (!cell) return 0;
+    return LG.parseIdNumber(cell.textContent);
   }
 
   function parseApiAmount(value) {
@@ -1599,15 +1584,7 @@ return (s || '').toString().replace(/\s+/g, ' ').trim().toLowerCase();
 };
 function parseCell(cell) {
 if (!cell) return 0;
-// Prioritas membaca data-val (kompatibel dengan Totalizer Suite)
-const dataValEl = cell.querySelector('[data-val]');
-let raw = dataValEl ? dataValEl.getAttribute('data-val') : cell.textContent;
-if (raw == null) return 0;
-raw = String(raw).trim();
-if (!raw) return 0;
-const isNegative = /[-−]/.test(String(raw)) || !!cell.querySelector('.lgt-neg');
-const num = LG.parseIdNumber(raw);
-return isNegative ? -Math.abs(num) : num;
+return LG.parseIdNumber(cell.textContent);
 }
 const fmtMoney = (n) => {
 return new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(Math.round(n));
@@ -1977,7 +1954,6 @@ setOpen(false);
 });
 const REG_LONG = /\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?/g;
 const REG_STRICT = /\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?/g;
-const parseNum = (s) => parseInt(String(s).replace(/[.,]/g, ''), 10) || 0;
 const fmt = (n) => Math.abs(n).toLocaleString('id-ID');
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 let prevCount = 0;
@@ -1992,13 +1968,13 @@ const firstCell = row.querySelector('mat-cell, .mat-cell, td');
 rowId = firstCell ? firstCell.textContent.trim().substring(0, 50) : '';
 }
 const cellClass = cell ? Array.from(cell.classList).filter(c => c.startsWith('mat-column-')).join(',') : '';
-const val = span.dataset.val || '';
+const val = span.dataset.lgtVal || '';
 const grp = span.dataset.grp || '';
 return `${rowId}||${cellClass}||${val}||${grp}`;
 }
 function saveSelection(span, neg) {
 const key = getSelectionKey(span);
-selectionMemory.set(key, { val: span.dataset.val, neg: !!neg });
+selectionMemory.set(key, { val: span.dataset.lgtVal, neg: !!neg });
 }
 function removeSelection(span) {
 const key = getSelectionKey(span);
@@ -2025,7 +2001,7 @@ const sels = [...document.querySelectorAll('.lgt-num.lgt-sel')];
 let sum = 0;
 let neg = 0;
 sels.forEach((s) => {
-const v = +s.dataset.val || 0;
+const v = +s.dataset.lgtVal || 0;
 if (s.classList.contains('lgt-neg')) {
 sum -= v;
 neg++;
@@ -2189,7 +2165,7 @@ if (h.i > last) frag.appendChild(document.createTextNode(text.slice(last, h.i)))
 const span = document.createElement('span');
 span.className = 'lgt-num';
 span.dataset.grp = grp;
-span.dataset.val = String(parseNum(h.v));
+span.dataset.lgtVal = String(LG.parseIdNumber(h.v));
 span.textContent = h.v;
 span.title = 'Klik: + • klik lagi: − • klik lagi: lepas';
 frag.appendChild(span);
