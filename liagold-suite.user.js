@@ -176,6 +176,16 @@ const LG = {
     }
     return LG.parseIdNumber(item.SellingPriceDisplay || item.Price || 0);
   },
+  parsePendingQueue(raw) {
+    if (raw == null) return [];
+    try {
+      const val = JSON.parse(raw);
+      if (!Array.isArray(val)) return [];
+      return val.filter((x) => x && typeof x === 'object' && x.codeProduct);
+    } catch (e) {
+      return [];
+    }
+  },
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
   },
@@ -2476,6 +2486,16 @@ let scanQueue = [];
 let isScanning = false;
 let pendingLocalScans = new Set();
 let pendingCloudPushes = [];
+const PENDING_KEY = 'lg_pendingCloudPushes';
+function persistPendingPushes() {
+try {
+if (!pendingCloudPushes.length) {
+localStorage.removeItem(PENDING_KEY);
+return;
+}
+localStorage.setItem(PENDING_KEY, JSON.stringify(pendingCloudPushes));
+} catch (e) {}
+}
 let retryTimer = null;
 let audioCtx = null;
 let renderThrottleTimer = null;
@@ -2954,6 +2974,7 @@ return;
 if (i === retries - 1) {
 updateStatus('⚠️ Gagal kirim ke cloud setelah ' + retries + 'x. Data di-queue.');
 pendingCloudPushes.push({ ...entry, uniqueKey });
+persistPendingPushes();
 scheduleRetryPush();
 } else {
 await sleep(400 * (i + 1));
@@ -2980,6 +3001,7 @@ pendingCloudPushes.push(entry);
 }
 await sleep(200);
 }
+persistPendingPushes();
 if (pendingCloudPushes.length) scheduleRetryPush();
 }, 5000);
 }
@@ -3076,6 +3098,7 @@ formQueue = [];
 formRetryCount = 0;
 pendingLocalScans = new Set();
 pendingCloudPushes = [];
+persistPendingPushes();
 statusFilter = 'none';
 await migrateSoloScansToSession();
 listenSession();
@@ -3124,6 +3147,7 @@ formQueue = [];
 formRetryCount = 0;
 pendingLocalScans = new Set();
 pendingCloudPushes = [];
+persistPendingPushes();
 statusFilter = 'none';
 await migrateSoloScansToSession();
 listenSession();
@@ -3163,6 +3187,7 @@ formQueue = [];
 formRetryCount = 0;
 pendingLocalScans = new Set();
 pendingCloudPushes = [];
+try { localStorage.removeItem(PENDING_KEY); } catch (e) {}
 esFailCount = 0;
 statusFilter = 'none';
 if (retryTimer) {
@@ -3223,6 +3248,7 @@ persistScanLog();
 }
 window.addEventListener('beforeunload', () => {
 if (scanLog.length) persistScanLog();
+if (pendingCloudPushes.length) persistPendingPushes();
 });
 async function verifySessionAlive() {
 if (!sessionId || isDeletingSession) return;
@@ -4553,6 +4579,8 @@ startCountdownInterval();
 if (isMulti()) {
 listenSession();
 checkSessionExpiry();
+pendingCloudPushes = LG.parsePendingQueue(localStorage.getItem(PENDING_KEY));
+if (pendingCloudPushes.length) scheduleRetryPush();
 updateStatus(`🟢 Menyambung ke sesi ${sessionId}…`);
 }
 if (trayList.length) {
