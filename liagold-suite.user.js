@@ -265,10 +265,14 @@ const LG = {
       if (!raw) return {};
 
       const obj = JSON.parse(raw);
-      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return {};
+      if (!obj || typeof obj !== 'object' || Array.isArray(obj)) {
+        localStorage.removeItem(STORAGE_KEY);
+        return {};
+      }
 
       return obj;
     } catch (e) {
+      try { localStorage.removeItem(STORAGE_KEY); } catch (e2) {}
       return {};
     }
   }
