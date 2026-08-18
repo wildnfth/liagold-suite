@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.25
-// @description  v1.0.25: Unified Suite - Totalizer, Scanner, Payment Detail & ERP Footer (+ total bayar & jumlah transaksi di footer non-invoice)
+// @version      1.0.26
+// @description  v1.0.26: fix session expiry race, deterministic scan keys, id-ID parse, footer ignores totalizer
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -14,6 +14,75 @@
 'use strict';
 if (window.__lgUltimateSuite) return;
 window.__lgUltimateSuite = true;
+
+// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js
+// Keep bodies identical. Later tasks fill history-key + parse-id-number.
+const LG = {
+  DATA_TTL_MS: 12 * 60 * 60 * 1000,
+  parseTimestamp(value) {
+    if (value == null || value === '') return null;
+    const t = new Date(value).getTime();
+    return Number.isFinite(t) ? t : null;
+  },
+  getRemainingTime(lastScanAt, now, ttlMs) {
+    if (now == null) now = Date.now();
+    if (ttlMs == null) ttlMs = LG.DATA_TTL_MS;
+    const t = LG.parseTimestamp(lastScanAt);
+    if (t == null) return null;
+    return Math.max(0, t + ttlMs - now);
+  },
+  isDataExpired(lastScanAt, now, ttlMs) {
+    const remaining = LG.getRemainingTime(lastScanAt, now, ttlMs);
+    if (remaining == null) return false;
+    return remaining <= 0;
+  },
+  sanitizeKey(str) {
+    return String(str).replace(/[.#$\[\]/]/g, '_');
+  },
+  generateHistoryKey(codeProduct, timestamp) {
+    const cp = String(codeProduct || '').toLowerCase();
+    const ts = String(timestamp || '');
+    return LG.sanitizeKey(cp + '_' + ts);
+  },
+  parseIdNumber(value) {
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : 0;
+    }
+    if (value == null) return 0;
+    const original = String(value).trim();
+    if (!original) return 0;
+    const negative = /[-−]/.test(original);
+    let raw = original.replace(/[^\d.,]/g, '');
+    if (!raw) return 0;
+    const lastComma = raw.lastIndexOf(',');
+    const lastDot = raw.lastIndexOf('.');
+    const commaCount = (raw.match(/,/g) || []).length;
+    const dotCount = (raw.match(/\./g) || []).length;
+    if (lastComma !== -1 && lastDot !== -1) {
+      if (lastComma > lastDot) {
+        raw = raw.replace(/\./g, '').replace(',', '.');
+      } else {
+        raw = raw.replace(/,/g, '');
+      }
+    } else if (dotCount > 0 && commaCount === 0) {
+      if (dotCount > 1) {
+        raw = raw.replace(/\./g, '');
+      } else {
+        const frac = raw.length - lastDot - 1;
+        if (frac === 3) raw = raw.replace('.', '');
+      }
+    } else if (commaCount > 0 && dotCount === 0) {
+      if (commaCount > 1) {
+        raw = raw.replace(/,/g, '');
+      } else {
+        raw = raw.replace(',', '.');
+      }
+    }
+    const num = parseFloat(raw);
+    if (!Number.isFinite(num)) return 0;
+    return negative ? -Math.abs(num) : num;
+  }
+};
 
 // ==========================================
 // MODULE 1: Gold ERP - Payment Method Detail
@@ -316,63 +385,12 @@ window.__lgUltimateSuite = true;
   }
 
   function parseCell(cell) {
-    try {
-      if (!cell) return 0;
-
-      const dataValEl = cell.querySelector('[data-val]');
-      let raw = dataValEl ? dataValEl.getAttribute('data-val') : cell.textContent;
-
-      if (raw == null) return 0;
-
-      raw = String(raw).trim();
-      if (!raw) return 0;
-
-      const isNegative = /[-−]/.test(raw) || !!cell.querySelector('.lgt-neg');
-
-      raw = raw.replace(/[^\d.,-]/g, '');
-      if (!raw) return 0;
-
-      if (raw.includes(',')) {
-        if (/,\d{3}(?:,|$)/.test(raw)) {
-          raw = raw.replace(/,/g, '');
-        } else {
-          raw = raw.replace(/,/g, '.');
-        }
-      }
-
-      const num = parseFloat(raw);
-      if (Number.isNaN(num)) return 0;
-
-      return isNegative ? -Math.abs(num) : num;
-    } catch (e) {
-      return 0;
-    }
+    if (!cell) return 0;
+    return LG.parseIdNumber(cell.textContent);
   }
 
   function parseApiAmount(value) {
-    try {
-      if (typeof value === 'number') return value;
-      if (value == null) return 0;
-
-      let raw = String(value).trim();
-      if (!raw) return 0;
-
-      raw = raw.replace(/[^\d.,-]/g, '');
-      if (!raw) return 0;
-
-      if (raw.includes(',')) {
-        if (/,\d{3}(?:,|$)/.test(raw)) {
-          raw = raw.replace(/,/g, '');
-        } else {
-          raw = raw.replace(/,/g, '.');
-        }
-      }
-
-      const num = parseFloat(raw);
-      return Number.isNaN(num) ? 0 : num;
-    } catch (e) {
-      return 0;
-    }
+    return LG.parseIdNumber(value);
   }
 
   function isNonInvoicePage() {
@@ -1566,25 +1584,7 @@ return (s || '').toString().replace(/\s+/g, ' ').trim().toLowerCase();
 };
 function parseCell(cell) {
 if (!cell) return 0;
-// Prioritas membaca data-val (kompatibel dengan Totalizer Suite)
-const dataValEl = cell.querySelector('[data-val]');
-let raw = dataValEl ? dataValEl.getAttribute('data-val') : cell.textContent;
-if (raw == null) return 0;
-raw = String(raw).trim();
-if (!raw) return 0;
-const isNegative = /[-−]/.test(raw) || !!cell.querySelector('.lgt-neg');
-raw = raw.replace(/[^\d.,-]/g, '');
-if (!raw) return 0;
-if (raw.includes(',')) {
-if (/,\d{3}(?:,|$)/.test(raw)) {
-raw = raw.replace(/,/g, '');
-} else {
-raw = raw.replace(/,/g, '.');
-}
-}
-const num = parseFloat(raw);
-if (Number.isNaN(num)) return 0;
-return isNegative ? -Math.abs(num) : num;
+return LG.parseIdNumber(cell.textContent);
 }
 const fmtMoney = (n) => {
 return new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 }).format(Math.round(n));
@@ -1954,7 +1954,6 @@ setOpen(false);
 });
 const REG_LONG = /\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?/g;
 const REG_STRICT = /\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?/g;
-const parseNum = (s) => parseInt(String(s).replace(/[.,]/g, ''), 10) || 0;
 const fmt = (n) => Math.abs(n).toLocaleString('id-ID');
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 let prevCount = 0;
@@ -1969,13 +1968,13 @@ const firstCell = row.querySelector('mat-cell, .mat-cell, td');
 rowId = firstCell ? firstCell.textContent.trim().substring(0, 50) : '';
 }
 const cellClass = cell ? Array.from(cell.classList).filter(c => c.startsWith('mat-column-')).join(',') : '';
-const val = span.dataset.val || '';
+const val = span.dataset.lgtVal || '';
 const grp = span.dataset.grp || '';
 return `${rowId}||${cellClass}||${val}||${grp}`;
 }
 function saveSelection(span, neg) {
 const key = getSelectionKey(span);
-selectionMemory.set(key, { val: span.dataset.val, neg: !!neg });
+selectionMemory.set(key, { val: span.dataset.lgtVal, neg: !!neg });
 }
 function removeSelection(span) {
 const key = getSelectionKey(span);
@@ -2002,7 +2001,7 @@ const sels = [...document.querySelectorAll('.lgt-num.lgt-sel')];
 let sum = 0;
 let neg = 0;
 sels.forEach((s) => {
-const v = +s.dataset.val || 0;
+const v = +s.dataset.lgtVal || 0;
 if (s.classList.contains('lgt-neg')) {
 sum -= v;
 neg++;
@@ -2166,7 +2165,7 @@ if (h.i > last) frag.appendChild(document.createTextNode(text.slice(last, h.i)))
 const span = document.createElement('span');
 span.className = 'lgt-num';
 span.dataset.grp = grp;
-span.dataset.val = String(parseNum(h.v));
+span.dataset.lgtVal = String(LG.parseIdNumber(h.v));
 span.textContent = h.v;
 span.title = 'Klik: + • klik lagi: − • klik lagi: lepas';
 frag.appendChild(span);
@@ -2365,18 +2364,16 @@ let filterBtnBound = false;
 let batchSize = parseInt(localStorage.getItem('lg_batchSize') || '25');
 let batchDelay = parseInt(localStorage.getItem('lg_batchDelay') || '1000');
 let lastScanAt = null;
+let expiryReady = false;
 let countdownIntervalId = null;
 let sessionCreatedAt = null;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 const isMulti = () => !!sessionId;
 function sanitizeKey(str) {
-return String(str).replace(/[.#$\[\]\/]/g, '_');
+return LG.sanitizeKey(str);
 }
 function generateHistoryKey(codeProduct, timestamp) {
-const cp = String(codeProduct || '').toLowerCase();
-const ts = timestamp || new Date().toISOString();
-const rand = Math.random().toString(36).substr(2, 6);
-return sanitizeKey(cp + '_' + ts + '_' + rand);
+return LG.generateHistoryKey(codeProduct, timestamp);
 }
 function isEntryExpired(entry) {
 if (!entry || !entry.time) return false;
@@ -2398,14 +2395,12 @@ localStorage.setItem('lg_lastScanAt', lastScanAt);
 updateCountdownDisplay();
 }
 function getRemainingTime() {
-if (!lastScanAt) return 0;
-const lastScanTime = new Date(lastScanAt).getTime();
-const expiresAt = lastScanTime + DATA_TTL_MS;
-const remaining = expiresAt - Date.now();
-return Math.max(0, remaining);
+const remaining = LG.getRemainingTime(lastScanAt);
+return remaining == null ? 0 : remaining;
 }
 function isDataExpired() {
-return getRemainingTime() <= 0;
+if (!expiryReady) return false;
+return LG.isDataExpired(lastScanAt);
 }
 function updateCountdownDisplay() {
 const countdownEl = document.getElementById('lg-countdown');
@@ -2416,7 +2411,7 @@ return;
 }
 countdownEl.style.display = 'block';
 const remaining = getRemainingTime();
-if (remaining <= 0) {
+if (expiryReady && LG.isDataExpired(lastScanAt)) {
 countdownEl.innerHTML = '⏰ DATA EXPIRED';
 countdownEl.style.color = '#dc2626';
 countdownEl.style.fontWeight = '700';
@@ -2449,6 +2444,7 @@ countdownIntervalId = null;
 }
 }
 function handleSoloExpiry() {
+if (!expiryReady || !LG.isDataExpired(lastScanAt)) return;
 if (scanLog.length === 0) return;
 updateStatus('🗑️ Data scan expired (>12 jam). Menghapus otomatis...');
 scanLog = [];
@@ -2464,6 +2460,7 @@ alert('⏰ Data scan telah EXPIRED (>12 jam tanpa scan).\nSemua data scan lokal 
 }
 async function handleOnlineExpiry() {
 if (!sessionId || isDeletingSession) return;
+if (!expiryReady || !LG.isDataExpired(lastScanAt)) return;
 isDeletingSession = true;
 try {
 updateStatus('🗑️ Data scan expired (>12 jam). Menghapus sesi dari cloud...');
@@ -2482,12 +2479,12 @@ if (isMulti()) {
 try {
 const res = await fetch(`${FIREBASE}/opname/${sessionId}/meta.json`);
 const meta = await res.json();
-lastScanAt = meta?.lastScanAt || meta?.dibuat || null;
+lastScanAt = meta?.lastScanAt || meta?.dibuat || lastScanAt || null;
 } catch (e) {
-lastScanAt = null;
+// keep previous lastScanAt
 }
 } else {
-lastScanAt = localStorage.getItem('lg_lastScanAt') || null;
+lastScanAt = localStorage.getItem('lg_lastScanAt') || lastScanAt || null;
 }
 updateCountdownDisplay();
 }
@@ -2860,8 +2857,8 @@ Object.keys(data2).forEach(k => existingKeys.add(k));
 const payload = {};
 let count = 0;
 byCode.forEach((l, k) => {
-const uniqueKey = generateHistoryKey(l.codeProduct, l.timeIso || l.time);
-if (existingKeys.has(uniqueKey)) return;
+const uniqueKey = generateHistoryKey(l.codeProduct, l.timeIso || '');
+if (!l.timeIso || existingKeys.has(uniqueKey)) return;
 payload[uniqueKey] = {
 by: myName,
 time: l.timeIso || new Date().toISOString(),
@@ -3109,9 +3106,8 @@ cloudHistory = data.history || {};
 if (data.scans) {
 Object.entries(data.scans).forEach(([k, v]) => {
 if (!v || !v.codeProduct) return;
-const uniqueKey = generateHistoryKey(v.codeProduct, v.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = v;
+if (!cloudHistory[k]) {
+cloudHistory[k] = v;
 }
 });
 }
@@ -3159,17 +3155,15 @@ const scansData = path === '/scans' ? data : null;
 if (scansData && typeof scansData === 'object') {
 Object.entries(scansData).forEach(([k, v]) => {
 if (!v || !v.codeProduct) return;
-const uniqueKey = generateHistoryKey(v.codeProduct, v.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = v;
+if (!cloudHistory[k]) {
+cloudHistory[k] = v;
 }
 });
 } else if (path.startsWith('/scans/')) {
 const k = path.slice('/scans/'.length);
 if (data && data.codeProduct) {
-const uniqueKey = generateHistoryKey(data.codeProduct, data.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = data;
+if (!cloudHistory[k]) {
+cloudHistory[k] = data;
 }
 }
 }
@@ -3218,9 +3212,8 @@ updateCountdownDisplay();
 if (k === 'scans' && v && typeof v === 'object') {
 Object.entries(v).forEach(([sk, sv]) => {
 if (!sv || !sv.codeProduct) return;
-const uniqueKey = generateHistoryKey(sv.codeProduct, sv.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = sv;
+if (!cloudHistory[sk]) {
+cloudHistory[sk] = sv;
 }
 });
 }
@@ -3264,9 +3257,8 @@ const scansData = path === '/scans' ? data : null;
 if (scansData && typeof scansData === 'object') {
 Object.entries(scansData).forEach(([k, v]) => {
 if (!v || !v.codeProduct) return;
-const uniqueKey = generateHistoryKey(v.codeProduct, v.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = v;
+if (!cloudHistory[k]) {
+cloudHistory[k] = v;
 }
 });
 } else if (path.startsWith('/scans/')) {
@@ -3276,9 +3268,8 @@ if (entryData && typeof entryData === 'object') {
 Object.entries(entryData).forEach(([subK, v]) => {
 if (v === null) return;
 if (!v.codeProduct) return;
-const uniqueKey = generateHistoryKey(v.codeProduct, v.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = v;
+if (!cloudHistory[subK]) {
+cloudHistory[subK] = v;
 }
 });
 }
@@ -3324,9 +3315,8 @@ cloudHistory = data.history || {};
 if (data.scans) {
 Object.entries(data.scans).forEach(([k, v]) => {
 if (!v || !v.codeProduct) return;
-const uniqueKey = generateHistoryKey(v.codeProduct, v.time || '');
-if (!cloudHistory[uniqueKey]) {
-cloudHistory[uniqueKey] = v;
+if (!cloudHistory[k]) {
+cloudHistory[k] = v;
 }
 });
 }
@@ -4396,7 +4386,11 @@ injectUI();
 updateMpUI();
 renderLog();
 updateStats();
-loadLastScanAt();
+expiryReady = false;
+loadLastScanAt().finally(() => {
+expiryReady = true;
+updateCountdownDisplay();
+});
 startCountdownInterval();
 if (isMulti()) {
 listenSession();
