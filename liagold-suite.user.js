@@ -15,7 +15,7 @@
 if (window.__lgUltimateSuite) return;
 window.__lgUltimateSuite = true;
 
-// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js, lib/payment-page.js, lib/form-fill-policy.js, lib/payment-cache-policy.js
+// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js, lib/payment-page.js, lib/form-fill-policy.js, lib/payment-cache-policy.js, lib/totalizer-numbers.js
 // Keep bodies identical.
 const LG = {
   DATA_TTL_MS: 12 * 60 * 60 * 1000,
@@ -126,6 +126,20 @@ const LG = {
     if (!itemFound) return 'tempEmpty';
     if (LG.isEmptyPayment(value)) return 'tempEmpty';
     return 'persist';
+  },
+  findNumberHits(text, mode) {
+    const LONG_RE = /\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?|\d{4,}(?:[.,]\d+)?|\d{1,3}(?:[.,]\d+)?/g;
+    const STRICT_RE = /\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?/g;
+    const re = mode === 'strict' ? STRICT_RE : LONG_RE;
+    re.lastIndex = 0;
+    const hits = [];
+    let m;
+    const src = String(text ?? '');
+    while ((m = re.exec(src)) !== null) {
+      hits.push({ v: m[0], i: m.index });
+      if (m.index === re.lastIndex) re.lastIndex++;
+    }
+    return hits;
   }
 };
 
@@ -1958,8 +1972,6 @@ panel.querySelector('#lgt-close').addEventListener('click', (e) => {
 e.stopPropagation();
 setOpen(false);
 });
-const REG_LONG = /\d{1,3}(?:[.,]\d{3})*(?:[.,]\d+)?/g;
-const REG_STRICT = /\d{1,3}(?:[.,]\d{3})+(?:[.,]\d+)?/g;
 const fmt = (n) => Math.abs(n).toLocaleString('id-ID');
 const esc = (s) => String(s).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
 let prevCount = 0;
@@ -2135,14 +2147,14 @@ const TABLE_ZONE = 'mat-table, .mat-table, table, [role="grid"]';
 const SKIP = '#lgt-panel,#lgt-fab,#lgt-toast,.lgt-num,script,style,noscript,input,textarea,select,button,form,mat-form-field,.mat-form-field,[contenteditable],mat-dialog-container,.mat-dialog-container,mat-step,mat-expansion-panel';
 function groupOf(node) {
 const cell = node.parentNode ? node.parentNode.closest('mat-cell, td') : null;
-if (!cell) return { grp: 'X', re: REG_STRICT };
+if (!cell) return { grp: 'X', mode: 'strict' };
 const cls = cell.className || '';
-if (cls.includes('mat-column-totalReal')) return { grp: 'T', re: REG_LONG };
-if (cls.includes('mat-column-cashBanks')) return { grp: 'R', re: REG_LONG };
+if (cls.includes('mat-column-totalReal')) return { grp: 'T', mode: 'long' };
+if (cls.includes('mat-column-cashBanks')) return { grp: 'R', mode: 'long' };
 if (cls.includes('mat-column-price') || cls.includes('mat-column-total') || cls.includes('mat-column-amount')) {
-return { grp: 'X', re: REG_LONG };
+return { grp: 'X', mode: 'long' };
 }
-return { grp: 'X', re: REG_STRICT };
+return { grp: 'X', mode: 'strict' };
 }
 let selfMutating = false;
 function processTextNode(node) {
@@ -2152,14 +2164,8 @@ if (parent.closest(SKIP)) return;
 if (!parent.closest(TABLE_ZONE)) return;
 const text = node.nodeValue;
 if (!text || !/\d/.test(text)) return;
-const { grp, re } = groupOf(node);
-re.lastIndex = 0;
-const hits = [];
-let m;
-while ((m = re.exec(text)) !== null) {
-hits.push({ v: m[0], i: m.index });
-if (m.index === re.lastIndex) re.lastIndex++;
-}
+const { grp, mode } = groupOf(node);
+const hits = LG.findNumberHits(text, mode);
 if (!hits.length) return;
 const wasMutating = selfMutating;
 selfMutating = true;
