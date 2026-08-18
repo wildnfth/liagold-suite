@@ -15,7 +15,7 @@
 if (window.__lgUltimateSuite) return;
 window.__lgUltimateSuite = true;
 
-// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js, lib/payment-page.js, lib/form-fill-policy.js, lib/payment-cache-policy.js, lib/totalizer-numbers.js
+// synced from lib/session-expiry.js, lib/history-key.js, lib/parse-id-number.js, lib/payment-page.js, lib/form-fill-policy.js, lib/payment-cache-policy.js, lib/totalizer-numbers.js, lib/totalizer-selection.js
 // Keep bodies identical.
 const LG = {
   DATA_TTL_MS: 12 * 60 * 60 * 1000,
@@ -140,6 +140,10 @@ const LG = {
       if (m.index === re.lastIndex) re.lastIndex++;
     }
     return hits;
+  },
+  buildSelectionKey({ rowCode, rowId, colClass, val, grp }) {
+    const row = rowCode || rowId || '';
+    return row + '||' + (colClass || '') + '||' + (val || '') + '||' + (grp || '');
   }
 };
 
@@ -1980,15 +1984,18 @@ const selectionMemory = new Map();
 function getSelectionKey(span) {
 const row = span.closest('mat-row, .mat-row, tr');
 const cell = span.closest('mat-cell, .mat-cell, td');
+let rowCode = '';
 let rowId = '';
 if (row) {
-const firstCell = row.querySelector('mat-cell, .mat-cell, td');
-rowId = firstCell ? firstCell.textContent.trim().substring(0, 50) : '';
+const codeCell = row.querySelector('td.mat-column-code, td.cdk-column-code, .mat-column-code');
+const idCell = row.querySelector('td.mat-column-id, td.cdk-column-id, .mat-column-id');
+if (codeCell) rowCode = codeCell.textContent.trim();
+if (idCell) rowId = idCell.textContent.trim();
 }
-const cellClass = cell ? Array.from(cell.classList).filter(c => c.startsWith('mat-column-')).join(',') : '';
+const colClass = cell ? Array.from(cell.classList).filter((c) => c.startsWith('mat-column-')).join(',') : '';
 const val = span.dataset.lgtVal || '';
 const grp = span.dataset.grp || '';
-return `${rowId}||${cellClass}||${val}||${grp}`;
+return LG.buildSelectionKey({ rowCode, rowId, colClass, val, grp });
 }
 function saveSelection(span, neg) {
 const key = getSelectionKey(span);
