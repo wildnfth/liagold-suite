@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.32
-// @description  v1.0.32: totalizer full money tokens, stable selection, bubble clicks, reschedule wrap, history re-hook
+// @version      1.0.34
+// @description  v1.0.34: remaining important — scanner storage/price/stats + scoped payment cache + clean NI map
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -150,6 +150,46 @@ const LG = {
     const elapsed = now - lastProcessTime;
     if (elapsed >= minGapMs) return 0;
     return minGapMs - elapsed;
+  },
+  parseArrayJson(raw, fallback) {
+    if (raw == null) return fallback;
+    try {
+      const val = JSON.parse(raw);
+      return Array.isArray(val) ? val : fallback;
+    } catch (e) {
+      return fallback;
+    }
+  },
+  scannedCodesFromLog(scanLog) {
+    const set = new Set();
+    if (!Array.isArray(scanLog)) return [];
+    for (const row of scanLog) {
+      if (!row || row.status !== 'MASUK' || row.codeProduct == null || row.codeProduct === '') continue;
+      set.add(String(row.codeProduct).toLowerCase());
+    }
+    return [...set];
+  },
+  pickProductPrice(item) {
+    if (!item || typeof item !== 'object') return 0;
+    for (const key of ['SellingPrice', 'Price', 'SellingPriceValue']) {
+      if (typeof item[key] === 'number' && Number.isFinite(item[key])) return item[key];
+    }
+    return LG.parseIdNumber(item.SellingPriceDisplay || item.Price || 0);
+  },
+  paymentCacheKey(code, nonInvoice) {
+    return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
+  },
+  buildNiLookupUrl(origin, path, filter, pageSize, pageNumber) {
+    if (pageNumber == null) pageNumber = 0;
+    const url = new URL(path, origin);
+    url.search = '';
+    url.searchParams.set('sortOrder', 'desc');
+    url.searchParams.set('sortField', 'id');
+    url.searchParams.set('pageNumber', String(pageNumber));
+    url.searchParams.set('pageSize', String(pageSize));
+    url.searchParams.set('startIndexCustom', '-1');
+    url.searchParams.set('generalFilter', filter == null ? '' : String(filter));
+    return url.toString();
   }
 };
 
@@ -207,8 +247,6 @@ const LG = {
   const niCodeCache = new Map();
   const niCodeEmpty = new Map();
   const niCodeInflight = new Map();
-  let niApiTemplate = '';
-  let niPayApiTemplate = '';
 
   const fetchQueue = [];
   let activeFetch = 0;
@@ -260,15 +298,20 @@ const LG = {
     }, 200);
   }
 
-  function getCache(code) {
-    const stored = storageCache[code];
+  function scoped(code, nonInvoice) {
+    return LG.paymentCacheKey(code, nonInvoice);
+  }
+
+  function getCache(code, nonInvoice) {
+    const key = scoped(code, nonInvoice);
+    const stored = storageCache[key];
     if (!stored || !LG.isPaymentCacheFresh(stored)) {
       if (stored) {
-        delete storageCache[code];
-        memCache.delete(code);
+        delete storageCache[key];
+        memCache.delete(key);
         saveStorageCache();
       } else {
-        memCache.delete(code);
+        memCache.delete(key);
       }
       return null;
     }
@@ -277,14 +320,15 @@ const LG = {
       m: typeof stored.m === 'string' ? stored.m : '-',
       a: Number(stored.a) || 0
     };
-    memCache.set(code, val);
+    memCache.set(key, val);
     return val;
   }
 
-  function setCache(code, value) {
-    memCache.set(code, value);
+  function setCache(code, nonInvoice, value) {
+    const key = scoped(code, nonInvoice);
+    memCache.set(key, value);
 
-    storageCache[code] = {
+    storageCache[key] = {
       m: value.m,
       a: value.a,
       t: Date.now()
@@ -293,13 +337,13 @@ const LG = {
     saveStorageCache();
   }
 
-  function isTempEmpty(code) {
-    const ts = tempEmpty.get(code);
+  function isTempEmpty(code, nonInvoice) {
+    const ts = tempEmpty.get(scoped(code, nonInvoice));
     return !!ts && (Date.now() - ts < TEMP_EMPTY_TTL);
   }
 
-  function setTempEmpty(code) {
-    tempEmpty.set(code, Date.now());
+  function setTempEmpty(code, nonInvoice) {
+    tempEmpty.set(scoped(code, nonInvoice), Date.now());
   }
 
   function isNiCodeEmpty(id) {
@@ -674,28 +718,7 @@ const LG = {
 
   // List pembelian non-invoice (punya PaymentMethodName/TotalPurchase, format sama /web/purchasing)
   function buildNonInvoicePaymentUrl(filter) {
-    if (niPayApiTemplate) {
-      try {
-        const url = new URL(niPayApiTemplate, window.location.origin);
-        url.searchParams.set('generalFilter', filter);
-        url.searchParams.set('pageNumber', '0');
-        url.searchParams.set('pageSize', '20');
-        return url.toString();
-      } catch (e) {
-        // fallback ke URL rakitan di bawah
-      }
-    }
-
-    const params = new URLSearchParams({
-      sortOrder: 'desc',
-      sortField: 'id',
-      pageNumber: '0',
-      pageSize: '20',
-      startIndexCustom: '-1',
-      generalFilter: filter
-    });
-
-    return `${window.location.origin}/web/purchasing/non-invoice?${params.toString()}`;
+    return LG.buildNiLookupUrl(window.location.origin, '/web/purchasing/non-invoice', filter, 20, 0);
   }
 
   function runFetchQueue() {
@@ -763,15 +786,16 @@ const LG = {
   }
 
   function fetchPayment(code, nonInvoice) {
-    const cached = getCache(code);
+    const key = scoped(code, nonInvoice);
+    const cached = getCache(code, nonInvoice);
     if (cached) return Promise.resolve(cached);
 
-    if (isTempEmpty(code)) {
+    if (isTempEmpty(code, nonInvoice)) {
       return Promise.resolve({ m: '', a: 0 });
     }
 
-    if (inflight.has(code)) {
-      return inflight.get(code);
+    if (inflight.has(key)) {
+      return inflight.get(key);
     }
 
     const build = nonInvoice ? buildNonInvoicePaymentUrl : buildApiUrl;
@@ -792,7 +816,7 @@ const LG = {
 
         if (!item) {
           const kind = LG.classifyPaymentFetch({ networkError: false, itemFound: false, value: null });
-          if (kind === 'tempEmpty') setTempEmpty(code);
+          if (kind === 'tempEmpty') setTempEmpty(code, nonInvoice);
           return { m: '', a: 0 };
         }
 
@@ -802,38 +826,45 @@ const LG = {
         };
 
         const kind = LG.classifyPaymentFetch({ networkError: false, itemFound: true, value });
-        if (kind === 'persist') setCache(code, value);
-        else if (kind === 'tempEmpty') setTempEmpty(code);
+        if (kind === 'persist') setCache(code, nonInvoice, value);
+        else if (kind === 'tempEmpty') setTempEmpty(code, nonInvoice);
         return kind === 'persist' ? value : { m: value.m || '', a: value.a || 0 };
       } catch (err) {
         return { m: '', a: 0 };
       } finally {
-        inflight.delete(code);
+        inflight.delete(key);
       }
     })();
 
-    inflight.set(code, promise);
+    inflight.set(key, promise);
     return promise;
   }
 
   // ===== Non-invoice: Id baris -> Code PC -> pembayaran =====
 
-  function buildNonInvoiceUrl(filter, pageSize) {
-    let url;
+  function buildNonInvoiceUrl(filter, pageSize, pageNumber) {
+    return LG.buildNiLookupUrl(
+      location.origin,
+      '/web/purchasing/detail-non-invoice',
+      filter,
+      pageSize,
+      pageNumber == null ? 0 : pageNumber
+    );
+  }
 
-    try {
-      url = new URL(
-        niApiTemplate || `${location.origin}/web/purchasing/detail-non-invoice`,
-        location.origin
-      );
-    } catch (e) {
-      url = new URL(`${location.origin}/web/purchasing/detail-non-invoice`);
+  function getNiCode(id) {
+    const hit = niCodeCache.get(String(id));
+    if (!hit) return '';
+    if (typeof hit === 'string') return hit;
+    if (!LG.isPaymentCacheFresh(hit)) {
+      niCodeCache.delete(String(id));
+      return '';
     }
+    return hit.c || '';
+  }
 
-    url.searchParams.set('generalFilter', filter);
-    url.searchParams.set('pageNumber', '0');
-    url.searchParams.set('pageSize', String(pageSize));
-    return url.toString();
+  function setNiCode(id, code) {
+    niCodeCache.set(String(id), { c: code, t: Date.now() });
   }
 
   function rememberNiItems(json) {
@@ -845,7 +876,7 @@ const LG = {
       const id = String(item.Id);
       const code = String(item.Code).trim().toUpperCase();
 
-      if (code) niCodeCache.set(id, code);
+      if (code) setNiCode(id, code);
     });
   }
 
@@ -862,19 +893,25 @@ const LG = {
   // Fallback: tarik list non-invoice sekali (pageSize besar) buat petakan Id -> Code
   function ensureNiBulk() {
     if (niBulkPromise) return niBulkPromise;
-    if (Date.now() < niBulkCooldown) return Promise.resolve();
+    if (Date.now() < niBulkCooldown) return Promise.resolve(false);
 
-    niBulkPromise = fetchJson(buildNonInvoiceUrl('', 500))
-      .then((json) => {
-        rememberNiItems(json);
+    niBulkPromise = (async () => {
+      try {
+        for (let page = 0; page < 10; page++) {
+          const json = await fetchJson(buildNonInvoiceUrl('', 500, page));
+          rememberNiItems(json);
+          const n = ((json && json.items) || []).length;
+          if (n < 500) break;
+        }
         niBulkCooldown = Date.now() + 60 * 1000;
-      })
-      .catch(() => {
+        return true;
+      } catch (e) {
         niBulkCooldown = Date.now() + 60 * 1000;
-      })
-      .finally(() => {
+        return false;
+      } finally {
         niBulkPromise = null;
-      });
+      }
+    })();
 
     return niBulkPromise;
   }
@@ -882,7 +919,8 @@ const LG = {
   function resolveNonInvoiceCode(id) {
     const key = String(id);
 
-    if (niCodeCache.has(key)) return Promise.resolve(niCodeCache.get(key));
+    const existing = getNiCode(key);
+    if (existing) return Promise.resolve(existing);
     if (niCodeInflight.has(key)) return niCodeInflight.get(key);
     if (isNiCodeEmpty(key)) return Promise.resolve('');
 
@@ -899,13 +937,10 @@ const LG = {
         }
 
         if (!item) {
-          await ensureNiBulk();
-
-          if (niCodeCache.has(key)) return niCodeCache.get(key);
-        }
-
-        if (!item) {
-          setNiCodeEmpty(key);
+          const bulkOk = await ensureNiBulk();
+          const mapped = getNiCode(key);
+          if (mapped) return mapped;
+          if (bulkOk) setNiCodeEmpty(key);
           return '';
         }
 
@@ -916,7 +951,7 @@ const LG = {
           return '';
         }
 
-        niCodeCache.set(key, code);
+        setNiCode(key, code);
         return code;
       } catch (e) {
         return '';
@@ -950,15 +985,6 @@ const LG = {
 
         // Hanya list detail yang dipetakan Id -> Code (ruang Id-nya beda dengan list pembayaran)
         if (isDetail) rememberNiItems(json);
-
-        const u = new URL(url, location.origin);
-        if (!(u.searchParams.get('generalFilter') || '').trim()) {
-          if (isDetail) {
-            niApiTemplate = url;
-          } else {
-            niPayApiTemplate = url;
-          }
-        }
       } catch (e) {
         // ignore
       }
@@ -1330,11 +1356,11 @@ const LG = {
 
       if (code && /^PC/i.test(code)) {
         // Kolom code tersedia: pakai kode PC langsung
-        const cached = getCache(code);
+        const cached = getCache(code, true);
 
         if (cached) {
           payments.set(row, cached);
-        } else if (!inflight.has(code) && !isTempEmpty(code)) {
+        } else if (!inflight.has(scoped(code, true)) && !isTempEmpty(code, true)) {
           needPayment.push(code);
         }
 
@@ -1345,14 +1371,14 @@ const LG = {
       const id = getRowId(row);
       if (!id) return;
 
-      const mapped = niCodeCache.get(id);
+      const mapped = getNiCode(id);
 
       if (mapped) {
-        const cached = getCache(mapped);
+        const cached = getCache(mapped, true);
 
         if (cached) {
           payments.set(row, cached);
-        } else if (!inflight.has(mapped) && !isTempEmpty(mapped)) {
+        } else if (!inflight.has(scoped(mapped, true)) && !isTempEmpty(mapped, true)) {
           needPayment.push(mapped);
         }
       } else if (!isNiCodeEmpty(id) && !niCodeInflight.has(id)) {
@@ -1436,7 +1462,7 @@ const LG = {
       const paymentMap = Object.create(null);
 
       codes.forEach((code) => {
-        const cached = getCache(code);
+        const cached = getCache(code, false);
         if (cached) {
           paymentMap[code] = cached;
         }
@@ -1449,7 +1475,7 @@ const LG = {
       });
 
       const missing = codes.filter((code) => {
-        return !paymentMap[code] && !inflight.has(code) && !isTempEmpty(code);
+        return !paymentMap[code] && !inflight.has(scoped(code, false)) && !isTempEmpty(code, false);
       });
 
       if (missing.length) {
@@ -1469,6 +1495,7 @@ const LG = {
   }
 
   function stripPurchasingInjects() {
+    niCodeCache.clear();
     document.querySelectorAll(
       'th.gold-pay-method-header, td.gold-pay-method, th.gold-pay-amount-header, td.gold-pay-amount'
     ).forEach((el) => el.remove());
@@ -2348,17 +2375,32 @@ localStorage.removeItem(key);
 return fallback;
 }
 }
+function safeParseArray(key, fallback) {
+const raw = localStorage.getItem(key);
+if (raw === null) return fallback;
+const val = LG.parseArrayJson(raw, null);
+if (val === null) {
+console.warn('[LiaGold] localStorage bukan array:', key);
+localStorage.removeItem(key);
+return fallback;
+}
+return val;
+}
+function rebuildScannedCodes() {
+scannedCodes = new Set(LG.scannedCodesFromLog(scanLog));
+}
 let allProducts = [];
 let productMap = new Map();
 let filteredProducts = [];
-let trayList = safeParse('lg_trayList', []);
+let trayList = safeParseArray('lg_trayList', []);
 let selectedTray = 'all';
 let traySelected = false;
 let scanFilter = 'all';
 let statusFilter = 'none';
 let autoFillForm = true;
-let scanLog = safeParse('lg_scanLog', []);
-let scannedCodes = new Set(scanLog.filter(l => l.status === 'MASUK').map(l => String(l.codeProduct).toLowerCase()));
+let scanLog = safeParseArray('lg_scanLog', []);
+let scannedCodes = new Set();
+rebuildScannedCodes();
 let sessionId = localStorage.getItem('lg_session') || null;
 let myName = localStorage.getItem('lg_mp_name') || '';
 let myId = localStorage.getItem('lg_mp_id') || (() => {
@@ -2576,7 +2618,7 @@ code: item.Code || '',
 name: item.Name || '',
 size: item.Size || '-',
 weight: item.WeightReal || item.WeightSystem || 0,
-price: item.SellingPriceDisplay || '0',
+price: LG.pickProductPrice(item),
 image: item.ProductPicture || '',
 kadar: item.Kadar || '',
 trayId: item.TrayId ?? null,
@@ -3075,8 +3117,8 @@ formRetryTimer = null;
 }
 stopCountdownInterval();
 localStorage.removeItem('lg_session');
-scanLog = safeParse('lg_scanLog', []);
-scannedCodes = new Set(scanLog.filter(l => l.status === 'MASUK').map(l => String(l.codeProduct).toLowerCase()));
+scanLog = safeParseArray('lg_scanLog', []);
+rebuildScannedCodes();
 updateMpUI();
 updateStats();
 renderLog();
@@ -3101,13 +3143,16 @@ isDeletingSession = false;
 }
 }
 function persistScanLog() {
+if (isMulti()) return;
 try {
 if (scanLog.length > MAX_SCAN_LOG) scanLog = scanLog.slice(0, MAX_SCAN_LOG);
 localStorage.setItem('lg_scanLog', JSON.stringify(scanLog));
+rebuildScannedCodes();
 } catch (e) {
 try {
 scanLog = scanLog.slice(0, 500);
 localStorage.setItem('lg_scanLog', JSON.stringify(scanLog));
+rebuildScannedCodes();
 } catch (e2) {}
 }
 }
@@ -3690,7 +3735,7 @@ code: item.Code || '-',
 name: item.Name || '',
 fullName: item.FullName || '',
 weight: item.WeightReal || item.WeightSystem || 0,
-price: item.SellingPriceDisplay || item.Price || '0',
+price: LG.pickProductPrice(item),
 image: item.ProductPicture || '',
 kadar: item.Kadar || '',
 trayCode: item.TrayCode || '-',
@@ -3916,7 +3961,7 @@ const progress = allProducts.filter(p => scannedCodes.has(String(p.codeProduct).
 const sisa = total - progress;
 const pct = total ? Math.round(progress / total * 100) : 0;
 const cnt = l => scanLog.filter(x => x.status === l).length;
-const sudah = isMulti() ? dupeCount : cnt('SUDAH DISCAN');
+const sudah = cnt('SUDAH DISCAN');
 const cards = [
 { l: 'Data In-Stock', v: total, c: '#1e293b' },
 { l: 'Total Scan', v: scanLog.length, c: '#1e293b' },
