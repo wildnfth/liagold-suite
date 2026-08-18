@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.27
-// @description  v1.0.27: payment columns only on /purchasing and /purchasing-non-invoice; method footer has no total
+// @version      1.0.28
+// @description  v1.0.28: no yellow footer or payment inject on purchasing child routes
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -87,6 +87,9 @@ const LG = {
   },
   isPurchasingNonInvoicePage(pathname) {
     return /^\/purchasing-non-invoice\/?$/.test(pathname);
+  },
+  isPurchasingFamilyChild(pathname) {
+    return /^\/purchasing-non-invoice\/.+/.test(pathname) || /^\/purchasing\/.+/.test(pathname);
   }
 };
 
@@ -1464,8 +1467,21 @@ const LG = {
     }
   }
 
+  function stripPurchasingInjects() {
+    document.querySelectorAll(
+      'th.gold-pay-method-header, td.gold-pay-method, th.gold-pay-amount-header, td.gold-pay-amount'
+    ).forEach((el) => el.remove());
+    document.querySelectorAll(
+      'tfoot tr.gold-pay-footer-row, tfoot tr.gold-total-footer-row'
+    ).forEach((el) => el.remove());
+  }
+
   function updateAll() {
     if (document.hidden) return;
+    if (LG.isPurchasingFamilyChild(location.pathname)) {
+      stripPurchasingInjects();
+      return;
+    }
     if (!LG.isPaymentInjectPage(location.pathname)) return;
 
     try {
@@ -1717,7 +1733,14 @@ tr.appendChild(td);
 }
 tr.dataset.signature = signature;
 }
+function stripYellowFooter() {
+document.querySelectorAll('tfoot tr.gold-total-footer-row').forEach((el) => el.remove());
+}
 function updateAll() {
+if (LG.isPurchasingFamilyChild(location.pathname)) {
+stripYellowFooter();
+return;
+}
 injectStyle();
 const tables = Array
 .from(document.querySelectorAll('table.mat-table'))

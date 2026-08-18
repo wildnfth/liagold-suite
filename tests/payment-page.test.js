@@ -1,6 +1,10 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { isPaymentInjectPage, isPurchasingNonInvoicePage } from '../lib/payment-page.js';
+import {
+  isPaymentInjectPage,
+  isPurchasingNonInvoicePage,
+  isPurchasingFamilyChild,
+} from '../lib/payment-page.js';
 
 describe('isPaymentInjectPage', () => {
   it('allows exact purchasing and non-invoice paths', () => {
@@ -31,5 +35,27 @@ describe('isPurchasingNonInvoicePage', () => {
     assert.equal(isPurchasingNonInvoicePage('/purchasing-non-invoice/'), true);
     assert.equal(isPurchasingNonInvoicePage('/purchasing-non-invoice/create'), false);
     assert.equal(isPurchasingNonInvoicePage('/purchasing'), false);
+  });
+});
+
+describe('isPurchasingFamilyChild', () => {
+  it('is false on the two list pages', () => {
+    assert.equal(isPurchasingFamilyChild('/purchasing'), false);
+    assert.equal(isPurchasingFamilyChild('/purchasing/'), false);
+    assert.equal(isPurchasingFamilyChild('/purchasing-non-invoice'), false);
+    assert.equal(isPurchasingFamilyChild('/purchasing-non-invoice/'), false);
+  });
+
+  it('is true on purchasing and non-invoice children', () => {
+    assert.equal(isPurchasingFamilyChild('/purchasing/123'), true);
+    assert.equal(isPurchasingFamilyChild('/purchasing/create'), true);
+    assert.equal(isPurchasingFamilyChild('/purchasing-non-invoice/create'), true);
+    assert.equal(isPurchasingFamilyChild('/purchasing-non-invoice/abc/edit'), true);
+  });
+
+  it('is false on unrelated pages', () => {
+    assert.equal(isPurchasingFamilyChild('/sales'), false);
+    assert.equal(isPurchasingFamilyChild('/purchasing-head'), false);
+    assert.equal(isPurchasingFamilyChild('/'), false);
   });
 });
