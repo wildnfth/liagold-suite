@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.36
-// @description  v1.0.36: Kirim ke Form follows active tray; drop unused history purge
+// @version      1.0.37
+// @description  v1.0.37: Sales payment totals footer by CashBanks method
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -226,6 +226,98 @@ const LG = {
     url.searchParams.set('startIndexCustom', '-1');
     url.searchParams.set('generalFilter', filter == null ? '' : String(filter));
     return url.toString();
+  },
+  parseSalesCashBanks(html) {
+    if (html == null || html === '') return [];
+    const text = String(html)
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<[^>]*>/g, '\n');
+    const out = [];
+    for (const rawLine of text.split(/\n+/)) {
+      const line = rawLine.replace(/\s+/g, ' ').trim();
+      if (!line) continue;
+      const match = line.match(/^(.+?)\s+-\s+(.+)$/);
+      if (!match) continue;
+      const method = match[1].trim();
+      const amountRaw = match[2].trim();
+      if (!method) continue;
+      const paren = /^\(.*\)$/.test(amountRaw);
+      const amount = LG.parseIdNumber(amountRaw.replace(/[()]/g, ''));
+      out.push({ method, amount: paren ? -Math.abs(amount) : amount });
+    }
+    return out;
+  },
+  salesMethodLabel(method) {
+    const key = String(method || '').trim().toUpperCase();
+    if (!key) return '';
+    const labels = {
+      TUN: 'Tunai',
+      'TF BCA': 'TF BCA',
+      'DBT BCA': 'Debet BCA',
+      'DBT BRI': 'Debet BRI',
+      SHOPEE: 'Shopee'
+    };
+    return labels[key] || String(method).trim();
+  },
+  aggregateSalesPayments(items) {
+    const list = Array.isArray(items) ? items : [];
+    const totals = new Map();
+    for (const item of list) {
+      for (const line of LG.parseSalesCashBanks(item && item.CashBanks)) {
+        totals.set(line.method, (totals.get(line.method) || 0) + line.amount);
+      }
+    }
+    const methods = [...totals.entries()]
+      .filter(([, amount]) => amount !== 0)
+      .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+      .map(([method, amount]) => ({
+        method,
+        label: LG.salesMethodLabel(method),
+        amount
+      }));
+    return {
+      methods,
+      total: methods.reduce((sum, row) => sum + row.amount, 0),
+      count: list.length
+    };
+  },
+  isSalesListPage(pathname) {
+    return /^\/sales\/?$/.test(pathname || '');
+  },
+  isSalesListApiUrl(url) {
+    if (!url) return false;
+    try {
+      const parsed = new URL(String(url), 'https://liagold.cuan.co');
+      return /\/web\/sales\/?$/.test(parsed.pathname);
+    } catch (e) {
+      return false;
+    }
+  },
+  salesApiPageNumber(url) {
+    try {
+      const parsed = new URL(String(url), 'https://liagold.cuan.co');
+      const n = Number(parsed.searchParams.get('pageNumber'));
+      return Number.isFinite(n) && n >= 0 ? n : 0;
+    } catch (e) {
+      return 0;
+    }
+  },
+  otherSalesPages({ pageNumber, pageSize, totalCount }) {
+    const size = Number(pageSize) || 0;
+    const total = Number(totalCount) || 0;
+    const current = Number(pageNumber) || 0;
+    if (size <= 0 || total <= 0) return [];
+    const last = Math.ceil(total / size) - 1;
+    const pages = [];
+    for (let page = 0; page <= last; page++) {
+      if (page !== current) pages.push(page);
+    }
+    return pages;
+  },
+  nextSalesListUrl(url, pageNumber) {
+    const parsed = new URL(String(url), 'https://liagold.cuan.co');
+    parsed.searchParams.set('pageNumber', String(pageNumber));
+    return parsed.toString();
   }
 };
 
@@ -1883,6 +1975,350 @@ attributeFilter: ['data-val', 'class']
 });
 updateAll();
 setInterval(safeUpdate, 2500);
+})();
+
+// ==========================================
+// MODULE 2b: Sales Payment Totals (CashBanks)
+// ==========================================
+(() => {
+  'use strict';
+
+  if (window.__lgSalesPayTotalsInjected) return;
+  window.__lgSalesPayTotalsInjected = true;
+
+  const STYLE_ID = 'gold-sales-pay-style';
+  const BAR_ID = 'gold-sales-pay-bar';
+  const moneyFmt = new Intl.NumberFormat('id-ID', { maximumFractionDigits: 0 });
+  const origFetch = window.fetch;
+
+  let filterKey = '';
+  let sourceUrl = '';
+  let pageItems = new Map();
+  let totalCount = 0;
+  let fetching = new Set();
+
+  function injectStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+#${BAR_ID} {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 0;
+  margin: 0 0 8px;
+  border-top: 2px solid #e3b53d;
+  background: #fffbe8;
+  font-family: inherit;
+  font-weight: 800;
+  color: #15151c;
+}
+#${BAR_ID} .gold-sales-pay-label {
+  background: #fff3c9;
+  color: #7c5c00;
+  padding: 10px 16px;
+  font-size: 13px;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+}
+#${BAR_ID} .gold-sales-pay-methods {
+  display: flex;
+  flex-wrap: wrap;
+  flex: 1;
+}
+#${BAR_ID} .gold-sales-pay-cell {
+  padding: 10px 16px;
+  min-width: 140px;
+  border-left: 1px solid #f0e2a8;
+}
+#${BAR_ID} .gold-sales-pay-method {
+  display: block;
+  font-size: 11px;
+  font-weight: 700;
+  color: #7c5c00;
+  letter-spacing: .02em;
+}
+#${BAR_ID} .gold-sales-pay-amount {
+  display: block;
+  margin-top: 2px;
+  font-size: 14px;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+#${BAR_ID} .gold-sales-pay-amount.neg {
+  color: #d2453a;
+}
+#${BAR_ID} .gold-sales-pay-sum {
+  background: #fff3c9;
+  margin-left: auto;
+}
+`;
+    document.head.appendChild(style);
+  }
+
+  function fmtMoney(n) {
+    return moneyFmt.format(Math.round(Number(n) || 0));
+  }
+
+  function currentFilterKey(url) {
+    try {
+      const parsed = new URL(String(url), location.origin);
+      parsed.searchParams.delete('pageNumber');
+      parsed.searchParams.delete('__lg');
+      return parsed.search;
+    } catch (e) {
+      return String(url || '');
+    }
+  }
+
+  function pageSizeOf(url, itemCount) {
+    try {
+      const n = Number(new URL(String(url), location.origin).searchParams.get('pageSize'));
+      if (Number.isFinite(n) && n > 0) return n;
+    } catch (e) {
+      // ignore
+    }
+    return itemCount || 100;
+  }
+
+  function allItems() {
+    const pages = [...pageItems.keys()].sort((a, b) => a - b);
+    const items = [];
+    for (const page of pages) {
+      const rows = pageItems.get(page) || [];
+      for (const row of rows) items.push(row);
+    }
+    return items;
+  }
+
+  function removeBar() {
+    const el = document.getElementById(BAR_ID);
+    if (el) el.remove();
+  }
+
+  function hostEl() {
+    return document.querySelector('m-sales-head-table');
+  }
+
+  let rendering = false;
+  function render() {
+    if (rendering) return;
+    rendering = true;
+    try {
+      if (!LG.isSalesListPage(location.pathname)) {
+        removeBar();
+        return;
+      }
+
+      const host = hostEl();
+      if (!host || !pageItems.size) {
+        if (!pageItems.size) removeBar();
+        return;
+      }
+
+      injectStyle();
+
+      const items = allItems();
+      const agg = LG.aggregateSalesPayments(items);
+      const loaded = items.length;
+      const known = totalCount || loaded;
+      const pending = fetching.size > 0 && loaded < known;
+      const label = pending
+        ? `TOTAL (${loaded}/${known} baris)`
+        : `TOTAL (${known || agg.count} baris)`;
+      const signature = JSON.stringify({
+        label,
+        methods: agg.methods,
+        total: agg.total
+      });
+
+      let bar = document.getElementById(BAR_ID);
+      if (!bar) {
+        bar = document.createElement('div');
+        bar.id = BAR_ID;
+      }
+
+      if (bar.dataset.signature !== signature) {
+        const cells = agg.methods.map((row) => {
+          const neg = row.amount < 0 ? ' neg' : '';
+          return `<div class="gold-sales-pay-cell"><span class="gold-sales-pay-method">${escapeHtml(row.label)}</span><span class="gold-sales-pay-amount${neg}">${fmtMoney(row.amount)}</span></div>`;
+        });
+        if (agg.methods.length) {
+          const neg = agg.total < 0 ? ' neg' : '';
+          cells.push(`<div class="gold-sales-pay-cell gold-sales-pay-sum"><span class="gold-sales-pay-method">Jumlah</span><span class="gold-sales-pay-amount${neg}">${fmtMoney(agg.total)}</span></div>`);
+        }
+        bar.innerHTML = `<div class="gold-sales-pay-label">${escapeHtml(label)}</div><div class="gold-sales-pay-methods">${cells.join('')}</div>`;
+        bar.dataset.signature = signature;
+      }
+
+      const bottom = host.querySelector('.mat-table__bottom');
+      if (bottom && bottom.parentNode === host) {
+        if (bar.nextElementSibling !== bottom) host.insertBefore(bar, bottom);
+      } else if (bar.parentNode !== host) {
+        host.appendChild(bar);
+      }
+    } finally {
+      rendering = false;
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function fetchExtra(url) {
+    if (!url || fetching.has(url) || typeof origFetch !== 'function') return;
+    let extraUrl = url;
+    try {
+      const parsed = new URL(url, location.origin);
+      parsed.searchParams.set('__lg', '1');
+      extraUrl = parsed.toString();
+    } catch (e) {
+      // keep url
+    }
+    if (fetching.has(extraUrl)) return;
+    fetching.add(url);
+    fetching.add(extraUrl);
+    origFetch.call(window, extraUrl, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' }
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        return res.json();
+      })
+      .then((json) => absorb(extraUrl, json))
+      .catch(() => {})
+      .finally(() => {
+        fetching.delete(url);
+        fetching.delete(extraUrl);
+        render();
+      });
+  }
+
+  function absorb(url, json) {
+    if (!json || typeof json !== 'object') return;
+
+    let isExtra = false;
+    try {
+      isExtra = new URL(String(url), location.origin).searchParams.get('__lg') === '1';
+    } catch (e) {
+      // ignore
+    }
+
+    const key = currentFilterKey(url);
+    if (isExtra && filterKey && key !== filterKey) return;
+    if (!isExtra && key !== filterKey) {
+      filterKey = key;
+      pageItems = new Map();
+      fetching = new Set();
+    }
+
+    sourceUrl = url;
+    const page = LG.salesApiPageNumber(url);
+    const items = Array.isArray(json.items) ? json.items : [];
+    pageItems.set(page, items);
+    if (Number.isFinite(Number(json.totalCount))) totalCount = Number(json.totalCount);
+
+    const size = pageSizeOf(url, items.length);
+    const needed = LG.otherSalesPages({
+      pageNumber: page,
+      pageSize: size,
+      totalCount
+    });
+
+    needed.forEach((p) => {
+      if (pageItems.has(p)) return;
+      fetchExtra(LG.nextSalesListUrl(sourceUrl, p));
+    });
+
+    render();
+  }
+
+  function readXhrJson(xhr) {
+    if (xhr.response && typeof xhr.response === 'object') return xhr.response;
+    try {
+      return JSON.parse(xhr.responseText);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  try {
+    const origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      try {
+        if (LG.isSalesListApiUrl(url)) this.__lgSalesUrl = url;
+      } catch (e) {
+        // ignore
+      }
+      return origOpen.apply(this, arguments);
+    };
+
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function () {
+      if (this.__lgSalesUrl) {
+        const url = this.__lgSalesUrl;
+        this.addEventListener('load', function () {
+          try {
+            absorb(url, readXhrJson(this));
+          } catch (e) {
+            // ignore
+          }
+        });
+      }
+      return origSend.apply(this, arguments);
+    };
+  } catch (e) {
+    // ignore
+  }
+
+  try {
+    if (typeof origFetch === 'function') {
+      window.fetch = function (input, init) {
+        let url = '';
+        try {
+          url = typeof input === 'string' ? input : (input && input.url) || '';
+        } catch (e) {
+          // ignore
+        }
+        const promise = origFetch.apply(this, arguments);
+        if (LG.isSalesListApiUrl(url)) {
+          promise
+            .then((res) => {
+              try {
+                res.clone().json().then((json) => absorb(url, json)).catch(() => {});
+              } catch (e) {
+                // ignore
+              }
+            })
+            .catch(() => {});
+        }
+        return promise;
+      };
+    }
+  } catch (e) {
+    // ignore
+  }
+
+  const observer = new MutationObserver(() => {
+    if (LG.isSalesListPage(location.pathname)) render();
+    else removeBar();
+  });
+  observer.observe(document.documentElement, { childList: true, subtree: true });
+
+  setInterval(() => {
+    if (LG.isSalesListPage(location.pathname)) render();
+    else removeBar();
+  }, 2500);
+
+  render();
 })();
 
 // ==========================================
