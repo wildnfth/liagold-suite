@@ -2638,33 +2638,6 @@ lastScanAt = localStorage.getItem('lg_lastScanAt') || lastScanAt || null;
 }
 updateCountdownDisplay();
 }
-async function purgeExpiredEntries() {
-if (!isMulti() || isDeletingSession) return;
-const expiredKeys = [];
-Object.entries(cloudHistory || {}).forEach(([key, entry]) => {
-if (isEntryExpired(entry)) {
-expiredKeys.push(key);
-}
-});
-if (expiredKeys.length === 0) return;
-updateStatus(`🗑️ Menghapus ${expiredKeys.length} scan expired (>12 jam)...`);
-let deleted = 0;
-for (let i = 0; i < expiredKeys.length; i += 50) {
-const batch = expiredKeys.slice(i, i + 50);
-for (const key of batch) {
-try {
-await fetch(`${FIREBASE}/opname/${sessionId}/history/${key}.json`, { method: 'DELETE' });
-delete cloudHistory[key];
-deleted++;
-} catch (e) {}
-}
-await sleep(100);
-}
-if (deleted > 0) {
-updateStatus(`🗑️ ${deleted} scan expired dihapus otomatis.`);
-onCloudUpdate();
-}
-}
 async function checkSessionExpiry() {
 if (!sessionId || isDeletingSession) return;
 try {
