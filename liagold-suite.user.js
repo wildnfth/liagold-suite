@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.35
-// @description  v1.0.35: medium issues — cache hygiene, tray load, pending queue, crypto session, no TTL auto-delete
+// @version      1.0.36
+// @description  v1.0.36: Kirim ke Form follows active tray; drop unused history purge
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -185,6 +185,18 @@ const LG = {
     } catch (e) {
       return [];
     }
+  },
+  filterCodesForActiveTray({ codes, selectedTray, productByCode, scanByCode }) {
+    if (selectedTray == null || selectedTray === '' || selectedTray === 'all') return [];
+    const tray = String(selectedTray);
+    return (codes || []).filter((code) => {
+      const lc = String(code).toLowerCase();
+      const product = productByCode && productByCode.get(lc);
+      if (product) return String(product.trayId) === tray;
+      const scan = scanByCode && scanByCode.get(lc);
+      if (scan && scan.trayId != null && scan.trayId !== '') return String(scan.trayId) === tray;
+      return false;
+    });
   },
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
@@ -4285,15 +4297,41 @@ if (!scannedList.length) {
 updateStatus('⚠️ Belum ada barang yang discan.');
 return;
 }
-updateStatus('🔍 Memeriksa isi form…');
-const formTextLower = getFormListText();
-const missing = scannedList.filter(code => !isCodeInForm(code, formTextLower) && !formFilledCodes.has(code));
-const already = scannedList.length - missing.length;
-if (!missing.length) {
-updateStatus(`✅ Semua ${scannedList.length} barang sudah ada di form.`);
+if (!selectedTray || selectedTray === 'all') {
+updateStatus('⚠️ Pilih baki dulu. Kirim ke Form tidak jalan di Semua Baki.');
 return;
 }
-if (!confirm(`📊 Hasil pemeriksaan form:\n✅ Sudah ada di form : ${already} barang\n📤 Belum ada di form : ${missing.length} barang\nLanjutkan?`)) return;
+const scanByCode = new Map();
+scanLog.forEach((row) => {
+if (!row || !row.codeProduct) return;
+const lc = String(row.codeProduct).toLowerCase();
+if (scanByCode.has(lc)) return;
+let trayId = null;
+if (row.tray && row.tray !== '-') {
+const info = trayList.find((t) => t.trayCode === row.tray);
+if (info) trayId = info.trayId;
+}
+scanByCode.set(lc, { trayId });
+});
+const eligible = LG.filterCodesForActiveTray({
+codes: scannedList,
+selectedTray,
+productByCode: productMap,
+scanByCode,
+});
+if (!eligible.length) {
+updateStatus('⚠️ Tidak ada scan MASUK di baki yang dipilih.');
+return;
+}
+updateStatus('🔍 Memeriksa isi form…');
+const formTextLower = getFormListText();
+const missing = eligible.filter(code => !isCodeInForm(code, formTextLower) && !formFilledCodes.has(code));
+const already = eligible.length - missing.length;
+if (!missing.length) {
+updateStatus(`✅ Semua ${eligible.length} barang baki ini sudah ada di form.`);
+return;
+}
+if (!confirm(`📊 Hasil pemeriksaan form (baki aktif):\n✅ Sudah ada di form : ${already} barang\n📤 Belum ada di form : ${missing.length} barang\nLanjutkan?`)) return;
 missing.forEach(code => queueFormInput(code));
 updateStatus(`📤 Mengirim ${missing.length} barang ke form (batch: ${batchSize}, delay: ${batchDelay}ms)...`);
 }
