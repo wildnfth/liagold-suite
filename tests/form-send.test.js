@@ -17,6 +17,11 @@ import {
   nextFormWaitTimeout,
   formListOptimizeClassNames,
   FORM_LIST_OPTIMIZE_CLASS,
+  looksLikeProductRecord,
+  pickProductListFromComponent,
+  chunkCodes,
+  buildInjectedProduct,
+  chooseFillStrategy,
 } from '../lib/form-send.js';
 
 describe('filterCodesForActiveTray', () => {
@@ -181,5 +186,61 @@ describe('formListOptimizeClassNames', () => {
     const off = formListOptimizeClassNames(on, false);
     assert.equal(off.split(/\s+/).includes(FORM_LIST_OPTIMIZE_CLASS), false);
     assert.equal(off.split(/\s+/).includes('list-section'), true);
+  });
+});
+
+describe('looksLikeProductRecord', () => {
+  it('accepts objects with CodeProduct or FullName', () => {
+    assert.equal(looksLikeProductRecord({ CodeProduct: 'A1' }), true);
+    assert.equal(looksLikeProductRecord({ FullName: 'ring' }), true);
+    assert.equal(looksLikeProductRecord({ qty: 1 }), false);
+    assert.equal(looksLikeProductRecord(null), false);
+  });
+});
+
+describe('pickProductListFromComponent', () => {
+  it('picks the product-named array even when it is empty', () => {
+    const found = pickProductListFromComponent({
+      title: 'opname',
+      details: [],
+      other: [1, 2, 3],
+    });
+    assert.equal(found.key, 'details');
+    assert.equal(found.list, found.parent.details);
+  });
+
+  it('prefers an array of product records over a named empty guess', () => {
+    const found = pickProductListFromComponent({
+      details: [],
+      rows: [{ CodeProduct: 'X' }, { CodeProduct: 'Y' }],
+    });
+    assert.equal(found.key, 'rows');
+    assert.equal(found.list.length, 2);
+  });
+});
+
+describe('chunkCodes', () => {
+  it('splits codes into fixed-size batches', () => {
+    assert.deepEqual(chunkCodes(['a', 'b', 'c', 'd', 'e'], 2), [['a', 'b'], ['c', 'd'], ['e']]);
+  });
+});
+
+describe('buildInjectedProduct', () => {
+  it('uses fetched fields and always sets CodeProduct', () => {
+    const row = buildInjectedProduct('SKU1', { Name: 'Cincin', CodeProduct: '' });
+    assert.equal(row.CodeProduct, 'SKU1');
+    assert.equal(row.Name, 'Cincin');
+  });
+
+  it('builds a stub when fetch missed', () => {
+    assert.deepEqual(buildInjectedProduct('SKU2', null), { CodeProduct: 'SKU2' });
+  });
+});
+
+describe('chooseFillStrategy', () => {
+  it('injects when a product list was found, otherwise clicks', () => {
+    assert.equal(chooseFillStrategy({ list: [] }), 'inject');
+    assert.equal(chooseFillStrategy(null), 'click');
+    assert.equal(chooseFillStrategy({ list: 'nope' }), 'click');
   });
 });

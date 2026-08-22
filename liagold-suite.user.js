@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
+// @name         LiaGold Suite Ultimate [BC-fast]
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.37
-// @description  v1.0.37: Sales payment totals footer by CashBanks method
+// @version      1.0.38-bc
+// @description  v1.0.38-bc: Form fill B/C — prefetch + Angular inject, click-search fallback
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -258,6 +258,62 @@ const LG = {
     if (longMs == null) longMs = 6000;
     if (shortMs == null) shortMs = 1500;
     return hadSuccess ? shortMs : longMs;
+  },
+  looksLikeProductRecord(x) {
+    if (!x || typeof x !== 'object') return false;
+    return x.CodeProduct != null || x.codeProduct != null || x.FullName != null;
+  },
+  scoreProductListKey(key, arr) {
+    const k = String(key).toLowerCase();
+    let score = 0;
+    if (/product|detail|item|list|opname|scan/.test(k)) score += 2;
+    if (Array.isArray(arr) && arr.length && LG.looksLikeProductRecord(arr[0])) score += 3;
+    if (Array.isArray(arr)) score += Math.min(arr.length, 10) * 0.1;
+    return score;
+  },
+  pickProductListFromComponent(root, maxDepth) {
+    if (maxDepth == null) maxDepth = 4;
+    let best = null;
+    let bestScore = -1;
+    const seen = new Set();
+    const walk = (obj, depth) => {
+      if (!obj || typeof obj !== 'object' || depth > maxDepth) return;
+      if (obj.nodeType) return;
+      if (seen.has(obj)) return;
+      seen.add(obj);
+      for (const key of Object.keys(obj)) {
+        let val;
+        try { val = obj[key]; } catch (e) { continue; }
+        if (Array.isArray(val)) {
+          const score = LG.scoreProductListKey(key, val);
+          if (score > bestScore) {
+            bestScore = score;
+            best = { key, list: val, parent: obj };
+          }
+        } else if (val && typeof val === 'object' && depth < maxDepth) {
+          walk(val, depth + 1);
+        }
+      }
+    };
+    walk(root, 0);
+    return bestScore >= 2 ? best : null;
+  },
+  chunkCodes(codes, size) {
+    const out = [];
+    const n = Math.max(1, Number(size) || 8);
+    const list = codes || [];
+    for (let i = 0; i < list.length; i += n) out.push(list.slice(i, i + n));
+    return out;
+  },
+  buildInjectedProduct(code, fetched) {
+    if (fetched && typeof fetched === 'object') {
+      return Object.assign({}, fetched, { CodeProduct: fetched.CodeProduct || code });
+    }
+    return { CodeProduct: code };
+  },
+  chooseFillStrategy(probe) {
+    if (probe && Array.isArray(probe.list)) return 'inject';
+    return 'click';
   },
   FORM_LIST_OPTIMIZE_CLASS: 'lg-form-fill-opt',
   formListOptimizeClassNames(current, on, cls) {
@@ -3400,6 +3456,124 @@ return String(trayInfo.trayId) === selectedTray;
 }
 return false;
 }
+function findDetectChanges(obj) {
+if (!obj || typeof obj !== 'object') return null;
+if (typeof obj.detectChanges === 'function') return function () { obj.detectChanges(); };
+if (typeof obj.markForCheck === 'function') return function () { obj.markForCheck(); };
+try {
+for (const k of Object.keys(obj)) {
+const v = obj[k];
+if (v && typeof v.detectChanges === 'function') return function () { v.detectChanges(); };
+}
+} catch (e) {}
+return null;
+}
+function probeFormComponent(input) {
+if (!input) return null;
+const candidates = [];
+try {
+if (typeof ng !== 'undefined') {
+if (ng.getOwningComponent) candidates.push(ng.getOwningComponent(input));
+if (ng.getComponent) {
+let el = input;
+while (el) {
+const c = ng.getComponent(el);
+if (c) candidates.push(c);
+el = el.parentElement;
+}
+}
+}
+} catch (e) {}
+let el = input;
+let hops = 0;
+while (el && hops < 12) {
+if (el.__ngContext__) candidates.push(el.__ngContext__);
+el = el.parentElement;
+hops++;
+}
+for (const cand of candidates) {
+if (!cand) continue;
+if (Array.isArray(cand)) {
+for (const item of cand) {
+if (!item || typeof item !== 'object' || item.nodeType) continue;
+const found = LG.pickProductListFromComponent(item, 4);
+if (found) return { list: found.list, parent: found.parent, key: found.key, detectChanges: findDetectChanges(item) || findDetectChanges(found.parent) };
+}
+continue;
+}
+const found = LG.pickProductListFromComponent(cand, 4);
+if (found) return { list: found.list, parent: found.parent, key: found.key, detectChanges: findDetectChanges(cand) || findDetectChanges(found.parent) };
+}
+return null;
+}
+function parseByCodePayload(d) {
+let item = null;
+if (Array.isArray(d) && d.length) item = d[0];
+else if (d && d.items && d.items.length) item = d.items[0];
+else if (d && d.data && d.data.length) item = d.data[0];
+else if (d && (d.Name || d.FullName || d.Id || d.CodeProduct)) item = d;
+return item;
+}
+async function prefetchProductMap(codes) {
+const map = new Map();
+const chunks = LG.chunkCodes(codes, 8);
+for (const chunk of chunks) {
+if (isStoppingForm) break;
+const rows = await Promise.all(chunk.map(async (code) => {
+try {
+const res = await fetch(API_BYCODE + encodeURIComponent(code));
+if (!res.ok) return [code, null];
+return [code, parseByCodePayload(await res.json())];
+} catch (e) {
+return [code, null];
+}
+}));
+for (const pair of rows) map.set(String(pair[0]).toLowerCase(), pair[1]);
+}
+return map;
+}
+function injectBatch(probe, codes, fetched) {
+for (const code of codes) {
+const item = fetched.get(String(code).toLowerCase());
+probe.list.push(LG.buildInjectedProduct(code, item));
+}
+if (typeof probe.detectChanges === 'function') {
+try { probe.detectChanges(); } catch (e) {}
+}
+}
+async function tryInjectFormCodes(codes) {
+const probe = probeFormComponent(getFormInput());
+if (LG.chooseFillStrategy(probe) !== 'inject') return 0;
+updateStatus('⚡ Prefetch + inject Angular (' + codes.length + ' kode)…');
+const beforeCount = getFormProductCount();
+const beforeSig = getFormCounters();
+const fetched = await prefetchProductMap(codes);
+if (isStoppingForm) return 0;
+const batches = LG.chunkCodes(codes, 40);
+if (!batches.length) return 0;
+injectBatch(probe, batches[0], fetched);
+await sleep(150);
+const firstOk = LG.formFillDetected({
+beforeCount,
+afterCount: getFormProductCount(),
+beforeSig,
+afterSig: getFormCounters(),
+});
+if (!firstOk) {
+updateStatus('⚠️ Inject Angular tidak terdeteksi. Fallback klik search…');
+return 0;
+}
+let injected = batches[0].length;
+updateStatus(`⚡ Inject ${injected}/${codes.length}…`);
+for (let i = 1; i < batches.length; i++) {
+if (isStoppingForm) break;
+injectBatch(probe, batches[i], fetched);
+injected += batches[i].length;
+updateStatus(`⚡ Inject ${injected}/${codes.length}…`);
+await new Promise((r) => requestAnimationFrame(() => r()));
+}
+return injected;
+}
 function queueFormInput(code) {
 if (!LG.enqueueFormCode(formQueue, formQueuedCodes, formFilledCodes, code)) return;
 processFormQueue();
@@ -3432,6 +3606,13 @@ let batchCount = 0;
 let exitedEarly = false;
 const totalItems = formQueue.length;
 try {
+const pendingCodes = formQueue.slice();
+const injected = await tryInjectFormCodes(pendingCodes);
+if (injected > 0) {
+for (let i = 0; i < injected; i++) formFilledCodes.add(String(pendingCodes[i]).toLowerCase());
+processed = injected;
+clearFormQueue();
+} else {
 const presentSet = LG.collectPresentCodes(formQueue, getFormListText());
 hideFormList();
 while (formQueue.length) {
@@ -3498,6 +3679,7 @@ updateStatus(`⚠️ Gagal input ${code}. Retry ${formAttemptCounts.get(lc)}/${L
 updateStatus(`⚠️ Gagal input ${code} setelah ${LG.MAX_FORM_CODE_ATTEMPTS}x. Dilewati.`);
 }
 await sleep(50);
+}
 }
 } finally {
 restoreFormList();
@@ -4961,7 +5143,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v36</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Form fill <b style="color:#16a34a;">BC-fast 1.0.38-bc</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
