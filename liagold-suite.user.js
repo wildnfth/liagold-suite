@@ -186,6 +186,107 @@ const LG = {
       return [];
     }
   },
+  codeInFormText(code, formTextLower) {
+    const ft = formTextLower || '';
+    const c = String(code).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    try {
+      return new RegExp('(?<![a-z0-9])' + c + '(?![a-z0-9])', 'i').test(ft);
+    } catch (e) {
+      return ft.includes(String(code).toLowerCase());
+    }
+  },
+  collectPresentCodes(codes, formTextLower) {
+    const set = new Set();
+    for (const code of codes || []) {
+      if (LG.codeInFormText(code, formTextLower)) set.add(String(code).toLowerCase());
+    }
+    return set;
+  },
+  findMissingFormCodes(codes, formTextLower, filledSet) {
+    return (codes || []).filter((code) => {
+      const lc = String(code).toLowerCase();
+      if (filledSet && filledSet.has(lc)) return false;
+      return !LG.codeInFormText(code, formTextLower);
+    });
+  },
+  enqueueFormCode(queue, queuedSet, filledSet, code) {
+    const lc = String(code).toLowerCase();
+    if ((filledSet && filledSet.has(lc)) || (queuedSet && queuedSet.has(lc))) return false;
+    if (queuedSet) queuedSet.add(lc);
+    queue.push(code);
+    return true;
+  },
+  dequeueFormCode(queue, queuedSet) {
+    const code = queue.shift();
+    if (code == null) return null;
+    if (queuedSet) queuedSet.delete(String(code).toLowerCase());
+    return code;
+  },
+  resetFormQueue(queue, queuedSet) {
+    if (queue) queue.length = 0;
+    if (queuedSet) queuedSet.clear();
+  },
+  beginFormSend(queue, queuedSet, filledSet, codes) {
+    LG.resetFormQueue(queue, queuedSet);
+    let n = 0;
+    for (const code of codes || []) {
+      if (LG.enqueueFormCode(queue, queuedSet, filledSet, code)) n++;
+    }
+    return n;
+  },
+  reconcileFilledCodes(filledSet, codes, formTextLower) {
+    if (!filledSet) return 0;
+    let removed = 0;
+    for (const code of codes || []) {
+      const lc = String(code).toLowerCase();
+      if (filledSet.has(lc) && !LG.codeInFormText(code, formTextLower)) {
+        filledSet.delete(lc);
+        removed++;
+      }
+    }
+    return removed;
+  },
+  formCountIncreased(beforeCount, afterCount) {
+    return Number(afterCount) > Number(beforeCount);
+  },
+  formFillDetected({ beforeCount, afterCount, beforeSig, afterSig }) {
+    if (LG.formCountIncreased(beforeCount, afterCount)) return true;
+    if (beforeSig != null && afterSig != null && String(beforeSig) !== String(afterSig)) return true;
+    return false;
+  },
+  nextFormWaitTimeout(hadSuccess, longMs, shortMs) {
+    if (longMs == null) longMs = 6000;
+    if (shortMs == null) shortMs = 1500;
+    return hadSuccess ? shortMs : longMs;
+  },
+  FORM_LIST_OPTIMIZE_CLASS: 'lg-form-fill-opt',
+  formListOptimizeClassNames(current, on, cls) {
+    if (cls == null) cls = LG.FORM_LIST_OPTIMIZE_CLASS;
+    const set = new Set(String(current || '').split(/\s+/).filter(Boolean));
+    if (on) set.add(cls);
+    else set.delete(cls);
+    return [...set].join(' ');
+  },
+  formListHidePatch() {
+    return {
+      contentVisibility: 'hidden',
+      containIntrinsicSize: '0px 0px',
+    };
+  },
+  applyInlineStylePatch(styleObj, patch) {
+    const prev = {};
+    for (const key of Object.keys(patch || {})) {
+      prev[key] = styleObj[key] || '';
+      styleObj[key] = patch[key];
+    }
+    return prev;
+  },
+  restoreInlineStylePatch(styleObj, prev) {
+    if (!prev) return;
+    for (const key of Object.keys(prev)) {
+      styleObj[key] = prev[key];
+    }
+  },
   filterCodesForActiveTray({ codes, selectedTray, productByCode, scanByCode }) {
     if (selectedTray == null || selectedTray === '' || selectedTray === 'all') return [];
     const tray = String(selectedTray);
@@ -2929,6 +3030,7 @@ let knownCloudKeys = new Set();
 let initialCloudSyncDone = false;
 let isDeletingSession = false;
 let formQueue = [];
+let formQueuedCodes = new Set();
 let isProcessingForm = false;
 let isStoppingForm = false;
 let formFilledCodes = new Set();
@@ -3048,7 +3150,7 @@ scanLog = [];
 scannedCodes = new Set();
 formFilledCodes = new Set();
 formAttemptCounts = new Map();
-formQueue = [];
+clearFormQueue();
 localStorage.removeItem('lg_scanLog');
 localStorage.removeItem('lg_lastScanAt');
 lastScanAt = null;
@@ -3227,6 +3329,16 @@ const btn = group.querySelector('.input-group-append button');
 if (btn) btn.click();
 }
 }
+function getFormListText() {
+let txt = '';
+document.querySelectorAll('.list-section ul.product-item').forEach(ul => {
+txt += ' ' + (ul.textContent || '');
+});
+return txt.toLowerCase();
+}
+function getFormProductCount() {
+return document.querySelectorAll('.list-section ul.product-item').length;
+}
 function getFormCounters() {
 const counters = {};
 document.querySelectorAll('.label-info-cont .label-info').forEach(li => {
@@ -3236,29 +3348,41 @@ if (help && val) counters[help.textContent.trim()] = val.textContent.trim();
 });
 return JSON.stringify(counters);
 }
-async function waitForFormChange(beforeSig, timeout = 8000) {
+async function waitForFormFill(beforeCount, beforeSig, timeout) {
+if (timeout == null) timeout = 6000;
 const start = Date.now();
 while (Date.now() - start < timeout) {
-await sleep(100);
-if (getFormCounters() !== beforeSig) return true;
+await sleep(50);
+if (LG.formFillDetected({
+beforeCount,
+afterCount: getFormProductCount(),
+beforeSig,
+afterSig: getFormCounters(),
+})) return true;
 }
 return false;
 }
-function getFormListText() {
-let txt = '';
-document.querySelectorAll('.list-section ul.product-item').forEach(ul => {
-txt += ' ' + (ul.textContent || '');
-});
-return txt.toLowerCase();
+function ensureFormFillOptStyle() {
+if (document.getElementById('lg-form-fill-opt-style')) return;
+const s = document.createElement('style');
+s.id = 'lg-form-fill-opt-style';
+s.textContent = '.' + LG.FORM_LIST_OPTIMIZE_CLASS + ' ul.product-item{content-visibility:auto;contain-intrinsic-size:auto 72px;}';
+document.head.appendChild(s);
 }
-function isCodeInForm(code, formTextLower) {
-const ft = formTextLower !== undefined ? formTextLower : getFormListText();
-const c = String(code).toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-try {
-return new RegExp('(?<![a-z0-9])' + c + '(?![a-z0-9])', 'i').test(ft);
-} catch (e) {
-return ft.includes(String(code).toLowerCase());
+function hideFormList() {
+const el = document.querySelector('.list-section');
+if (!el) return;
+ensureFormFillOptStyle();
+el.className = LG.formListOptimizeClassNames(el.className, true);
 }
+function restoreFormList() {
+const el = document.querySelector('.list-section');
+if (!el) return;
+el.className = LG.formListOptimizeClassNames(el.className, false);
+}
+function clearFormQueue() {
+formQueue = [];
+formQueuedCodes = new Set();
 }
 function shouldQueueToForm(entry) {
 if (!entry || !entry.codeProduct) return false;
@@ -3277,10 +3401,7 @@ return String(trayInfo.trayId) === selectedTray;
 return false;
 }
 function queueFormInput(code) {
-const lc = String(code).toLowerCase();
-if (formFilledCodes.has(lc)) return;
-if (formQueue.some(c => String(c).toLowerCase() === lc)) return;
-formQueue.push(code);
+if (!LG.enqueueFormCode(formQueue, formQueuedCodes, formFilledCodes, code)) return;
 processFormQueue();
 }
 async function processFormQueue() {
@@ -3290,7 +3411,7 @@ if (!getFormInput()) {
 formRetryCount++;
 if (formRetryCount > MAX_FORM_RETRY) {
 updateStatus(`⚠️ Form tidak tersedia setelah ${MAX_FORM_RETRY}x retry. Queue dihapus (${formQueue.length} kode).`);
-formQueue = [];
+clearFormQueue();
 formRetryCount = 0;
 return;
 }
@@ -3311,9 +3432,12 @@ let batchCount = 0;
 let exitedEarly = false;
 const totalItems = formQueue.length;
 try {
+const presentSet = LG.collectPresentCodes(formQueue, getFormListText());
+hideFormList();
 while (formQueue.length) {
 if (isStoppingForm) {
-updateStatus(`⏹ Dihentikan. ${formQueue.length} kode tersisa di queue.`);
+updateStatus(`⏹ Dihentikan. ${formQueue.length} kode tersisa. Kirim lagi untuk melanjutkan.`);
+clearFormQueue();
 break;
 }
 if (batchCount >= batchSize && formQueue.length > 0) {
@@ -3321,19 +3445,25 @@ updateStatus(`⏸️ Jeda batch: ${processed}/${totalItems} diproses. Menunggu $
 await sleep(batchDelay);
 batchCount = 0;
 if (isStoppingForm) {
-updateStatus(`⏹ Dihentikan setelah jeda batch.`);
+updateStatus(`⏹ Dihentikan setelah jeda batch. Kirim lagi untuk melanjutkan.`);
+clearFormQueue();
 break;
 }
 }
-const code = formQueue.shift();
+const code = LG.dequeueFormCode(formQueue, formQueuedCodes);
+if (code == null) break;
 const lc = String(code).toLowerCase();
-if (formFilledCodes.has(lc)) continue;
+if (formFilledCodes.has(lc) || presentSet.has(lc)) {
+formFilledCodes.add(lc);
+continue;
+}
 if (!getFormInput()) {
 formQueue.unshift(code);
+formQueuedCodes.add(lc);
 formRetryCount++;
 if (formRetryCount > MAX_FORM_RETRY) {
 updateStatus(`⚠️ Form hilang. Sisa ${formQueue.length} kode dihapus.`);
-formQueue = [];
+clearFormQueue();
 formRetryCount = 0;
 break;
 }
@@ -3346,26 +3476,23 @@ processFormQueue();
 exitedEarly = true;
 return;
 }
-if (isCodeInForm(code)) {
-formFilledCodes.add(lc);
-continue;
-}
+const beforeCount = getFormProductCount();
 const beforeSig = getFormCounters();
 const filled = fillCodeProductToForm(code);
 let changed = false;
 if (filled) {
-await sleep(150);
+await sleep(80);
 clickSearchBtn();
-changed = await waitForFormChange(beforeSig, 6000);
+changed = await waitForFormFill(beforeCount, beforeSig, LG.nextFormWaitTimeout(processed > 0));
 }
-const success = changed || isCodeInForm(code);
-const decision = LG.recordFormAttempt(formAttemptCounts, lc, success);
+if (changed) presentSet.add(lc);
+const decision = LG.recordFormAttempt(formAttemptCounts, lc, changed);
 if (decision.markFilled) {
 formFilledCodes.add(lc);
 processed++;
 batchCount++;
 } else if (decision.retry) {
-formQueue.push(code);
+LG.enqueueFormCode(formQueue, formQueuedCodes, formFilledCodes, code);
 updateStatus(`⚠️ Gagal input ${code}. Retry ${formAttemptCounts.get(lc)}/${LG.MAX_FORM_CODE_ATTEMPTS}…`);
 } else {
 updateStatus(`⚠️ Gagal input ${code} setelah ${LG.MAX_FORM_CODE_ATTEMPTS}x. Dilewati.`);
@@ -3373,6 +3500,7 @@ updateStatus(`⚠️ Gagal input ${code} setelah ${LG.MAX_FORM_CODE_ATTEMPTS}x. 
 await sleep(50);
 }
 } finally {
+restoreFormList();
 isProcessingForm = false;
 isStoppingForm = false;
 }
@@ -3521,7 +3649,7 @@ initialCloudSyncDone = false;
 dupeCount = 0;
 formFilledCodes = new Set();
 formAttemptCounts = new Map();
-formQueue = [];
+clearFormQueue();
 formRetryCount = 0;
 pendingLocalScans = new Set();
 pendingCloudPushes = [];
@@ -3570,7 +3698,7 @@ initialCloudSyncDone = false;
 dupeCount = 0;
 formFilledCodes = new Set();
 formAttemptCounts = new Map();
-formQueue = [];
+clearFormQueue();
 formRetryCount = 0;
 pendingLocalScans = new Set();
 pendingCloudPushes = [];
@@ -3610,7 +3738,7 @@ knownCloudKeys = new Set();
 initialCloudSyncDone = false;
 formFilledCodes = new Set();
 formAttemptCounts = new Map();
-formQueue = [];
+clearFormQueue();
 formRetryCount = 0;
 pendingLocalScans = new Set();
 pendingCloudPushes = [];
@@ -4692,7 +4820,7 @@ pendingLocalScans = new Set();
 knownCloudKeys = new Set();
 formFilledCodes = new Set();
 formAttemptCounts = new Map();
-formQueue = [];
+clearFormQueue();
 formRetryCount = 0;
 initialCloudSyncDone = false;
 statusFilter = 'none';
@@ -4706,7 +4834,7 @@ scanLog = [];
 scannedCodes = new Set();
 formFilledCodes = new Set();
 formAttemptCounts = new Map();
-formQueue = [];
+clearFormQueue();
 statusFilter = 'none';
 localStorage.removeItem('lg_scanLog');
 lastScanAt = new Date().toISOString();
@@ -4761,15 +4889,17 @@ return;
 }
 updateStatus('🔍 Memeriksa isi form…');
 const formTextLower = getFormListText();
-const missing = eligible.filter(code => !isCodeInForm(code, formTextLower) && !formFilledCodes.has(code));
+LG.reconcileFilledCodes(formFilledCodes, eligible, formTextLower);
+const missing = LG.findMissingFormCodes(eligible, formTextLower, formFilledCodes);
 const already = eligible.length - missing.length;
 if (!missing.length) {
 updateStatus(`✅ Semua ${eligible.length} barang baki ini sudah ada di form.`);
 return;
 }
 if (!confirm(`📊 Hasil pemeriksaan form (baki aktif):\n✅ Sudah ada di form : ${already} barang\n📤 Belum ada di form : ${missing.length} barang\nLanjutkan?`)) return;
-missing.forEach(code => queueFormInput(code));
+LG.beginFormSend(formQueue, formQueuedCodes, formFilledCodes, missing);
 updateStatus(`📤 Mengirim ${missing.length} barang ke form (batch: ${batchSize}, delay: ${batchDelay}ms)...`);
+processFormQueue();
 }
 function stopFormQueue() {
 if (isProcessingForm) {
