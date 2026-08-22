@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
+// @name         LiaGold Suite Ultimate [A-safe]
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.37
-// @description  v1.0.37: Sales payment totals footer by CashBanks method
+// @version      1.0.38-a
+// @description  v1.0.38-a: Form fill A — observer wait, adaptive batch, pause scanner UI
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -253,6 +253,12 @@ const LG = {
     if (LG.formCountIncreased(beforeCount, afterCount)) return true;
     if (beforeSig != null && afterSig != null && String(beforeSig) !== String(afterSig)) return true;
     return false;
+  },
+  shouldPauseBatch({ batchCount, batchSize, lastFillMs, slowThresholdMs }) {
+    if (!(Number(batchCount) >= Number(batchSize))) return false;
+    if (slowThresholdMs == null) slowThresholdMs = 400;
+    if (lastFillMs == null) return true;
+    return Number(lastFillMs) >= Number(slowThresholdMs);
   },
   nextFormWaitTimeout(hadSuccess, longMs, shortMs) {
     if (longMs == null) longMs = 6000;
@@ -3350,17 +3356,33 @@ return JSON.stringify(counters);
 }
 async function waitForFormFill(beforeCount, beforeSig, timeout) {
 if (timeout == null) timeout = 6000;
-const start = Date.now();
-while (Date.now() - start < timeout) {
-await sleep(50);
+return new Promise((resolve) => {
+let done = false;
+const finish = (ok) => {
+if (done) return;
+done = true;
+try { obs.disconnect(); } catch (e) {}
+clearInterval(poll);
+clearTimeout(tid);
+resolve(ok);
+};
+const check = () => {
 if (LG.formFillDetected({
 beforeCount,
 afterCount: getFormProductCount(),
 beforeSig,
 afterSig: getFormCounters(),
-})) return true;
-}
-return false;
+})) finish(true);
+};
+const root = document.querySelector('.list-section') || document.querySelector('.label-info-cont') || document.body;
+const obs = new MutationObserver(check);
+try {
+obs.observe(root, { childList: true, subtree: true, characterData: true });
+} catch (e) {}
+const poll = setInterval(check, 120);
+const tid = setTimeout(() => finish(false), timeout);
+check();
+});
 }
 function ensureFormFillOptStyle() {
 if (document.getElementById('lg-form-fill-opt-style')) return;
@@ -3429,6 +3451,7 @@ isStoppingForm = false;
 formRetryCount = 0;
 let processed = 0;
 let batchCount = 0;
+let lastFillMs = null;
 let exitedEarly = false;
 const totalItems = formQueue.length;
 try {
@@ -3440,7 +3463,7 @@ updateStatus(`⏹ Dihentikan. ${formQueue.length} kode tersisa. Kirim lagi untuk
 clearFormQueue();
 break;
 }
-if (batchCount >= batchSize && formQueue.length > 0) {
+if (LG.shouldPauseBatch({ batchCount, batchSize, lastFillMs, slowThresholdMs: 400 }) && formQueue.length > 0) {
 updateStatus(`⏸️ Jeda batch: ${processed}/${totalItems} diproses. Menunggu ${batchDelay}ms...`);
 await sleep(batchDelay);
 batchCount = 0;
@@ -3480,11 +3503,12 @@ const beforeCount = getFormProductCount();
 const beforeSig = getFormCounters();
 const filled = fillCodeProductToForm(code);
 let changed = false;
+const t0 = Date.now();
 if (filled) {
-await sleep(80);
 clickSearchBtn();
 changed = await waitForFormFill(beforeCount, beforeSig, LG.nextFormWaitTimeout(processed > 0));
 }
+lastFillMs = Date.now() - t0;
 if (changed) presentSet.add(lc);
 const decision = LG.recordFormAttempt(formAttemptCounts, lc, changed);
 if (decision.markFilled) {
@@ -3497,12 +3521,15 @@ updateStatus(`⚠️ Gagal input ${code}. Retry ${formAttemptCounts.get(lc)}/${L
 } else {
 updateStatus(`⚠️ Gagal input ${code} setelah ${LG.MAX_FORM_CODE_ATTEMPTS}x. Dilewati.`);
 }
-await sleep(50);
+await new Promise((r) => requestAnimationFrame(() => r()));
 }
 } finally {
 restoreFormList();
 isProcessingForm = false;
 isStoppingForm = false;
+try { updateStats(); } catch (e) {}
+try { renderLog(); } catch (e) {}
+try { applyFilters(); } catch (e) {}
 }
 if (processed > 0 && !isStoppingForm && !exitedEarly && formQueue.length === 0) {
 updateStatus(`✅ ${processed} kode berhasil diinput ke form.`);
@@ -4387,6 +4414,7 @@ return null;
 }
 }
 function applyFilters() {
+if (isProcessingForm) return;
 const banner = document.getElementById('lg-filter-banner');
 const bannerText = document.getElementById('lg-filter-banner-text');
 const clearBtn = document.getElementById('lg-clear-filter-btn');
@@ -4597,6 +4625,7 @@ o.stop(audioCtx.currentTime + 0.12);
 } catch (e) {}
 }
 function updateStats() {
+if (isProcessingForm) return;
 const total = allProducts.length;
 const progress = allProducts.filter(p => scannedCodes.has(String(p.codeProduct).toLowerCase())).length;
 const sisa = total - progress;
@@ -4651,6 +4680,7 @@ bar.textContent = pct > 8 ? pct + '%' : '';
 }
 }
 function renderLog() {
+if (isProcessingForm) return;
 const el = document.getElementById('lg-log');
 if (!el) return;
 if (!scanLog.length) {
@@ -4961,7 +4991,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v36</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Form fill <b style="color:#16a34a;">A-safe 1.0.38-a</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>

@@ -17,6 +17,7 @@ import {
   nextFormWaitTimeout,
   formListOptimizeClassNames,
   FORM_LIST_OPTIMIZE_CLASS,
+  shouldPauseBatch,
 } from '../lib/form-send.js';
 
 describe('filterCodesForActiveTray', () => {
@@ -181,5 +182,20 @@ describe('formListOptimizeClassNames', () => {
     const off = formListOptimizeClassNames(on, false);
     assert.equal(off.split(/\s+/).includes(FORM_LIST_OPTIMIZE_CLASS), false);
     assert.equal(off.split(/\s+/).includes('list-section'), true);
+  });
+});
+
+describe('shouldPauseBatch', () => {
+  it('does not pause before the batch is full', () => {
+    assert.equal(shouldPauseBatch({ batchCount: 24, batchSize: 25, lastFillMs: 800, slowThresholdMs: 400 }), false);
+  });
+
+  it('skips the delay when the last fill was fast', () => {
+    assert.equal(shouldPauseBatch({ batchCount: 25, batchSize: 25, lastFillMs: 120, slowThresholdMs: 400 }), false);
+  });
+
+  it('pauses when the last fill was slow or unknown', () => {
+    assert.equal(shouldPauseBatch({ batchCount: 25, batchSize: 25, lastFillMs: 900, slowThresholdMs: 400 }), true);
+    assert.equal(shouldPauseBatch({ batchCount: 25, batchSize: 25, lastFillMs: null, slowThresholdMs: 400 }), true);
   });
 });
