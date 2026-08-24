@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.39
-// @description  v1.0.39: Keep scanner focus on Tampermonkey kode barang input
+// @version      1.0.40
+// @description  v1.0.40: Remove scanner Export CSV
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -3811,7 +3811,7 @@ applyFilters();
 async function deleteSession() {
 if (!sessionId || isDeletingSession) return;
 const totalScans = Object.keys(cloudHistory).length;
-if (!confirm(`Hapus sesi ${sessionId} PERMANEN dari cloud?\n${totalScans} data scan akan dihapus untuk SEMUA peserta.\nSemua device lain akan OTOMATIS keluar.\n⚠️ Export CSV dulu kalau masih perlu datanya!`)) return;
+if (!confirm(`Hapus sesi ${sessionId} PERMANEN dari cloud?\n${totalScans} data scan akan dihapus untuk SEMUA peserta.\nSemua device lain akan OTOMATIS keluar.`)) return;
 isDeletingSession = true;
 try {
 persistScanLog();
@@ -4842,23 +4842,6 @@ el.classList.remove('lg-result-anim');
 void el.offsetWidth;
 el.classList.add('lg-result-anim');
 }
-function exportLog() {
-if (!scanLog.length) {
-updateStatus('⚠️ Tidak ada data untuk di-export.');
-return;
-}
-const csvEsc = s => '"' + String(s ?? '').replace(/"/g, '""') + '"';
-let csv = '\uFEFF' + ['Waktu','Kode Scan','CodeProduct','Code','Nama Barang','Baki','Oleh','Status'].map(csvEsc).join(',') + '\n';
-scanLog.forEach(l => {
-csv += [l.time, l.scanCode, l.codeProduct, l.code, l.name, l.tray, l.by || '-', l.status].map(csvEsc).join(',') + '\n';
-});
-const a = document.createElement('a');
-a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
-a.download = `scan_log_${new Date().toISOString().slice(0, 10)}.csv`;
-a.click();
-setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-updateStatus('✅ CSV berhasil di-export (' + scanLog.length + ' baris).');
-}
 function resetProgress() {
 if (isMulti()) {
 if (!confirm('Reset SEMUA progress sesi (untuk semua peserta)?')) return;
@@ -5029,7 +5012,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v39</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v40</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
@@ -5091,7 +5074,6 @@ style="width:70px;padding:5px 8px;border-radius:4px;border:1px solid #cbd5e1;fon
 <div style="display:flex;gap:6px;flex-wrap:wrap;">
 <button id="lg-send-form-btn" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">📤 Kirim ke Form</button>
 <button id="lg-stop-form-btn" style="padding:8px 16px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">⏹ Stop</button>
-<button id="lg-export-btn" style="padding:8px 16px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">📥 Export CSV</button>
 <button id="lg-reset-btn" style="padding:8px 16px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">🔄 Reset Progress</button>
 </div>
 </div>
@@ -5171,7 +5153,6 @@ enqueueScan(val);
 inp.value = '';
 }
 });
-document.getElementById('lg-export-btn').addEventListener('click', exportLog);
 document.getElementById('lg-reset-btn').addEventListener('click', resetProgress);
 document.getElementById('lg-sync-btn').addEventListener('click', syncTrayList);
 document.getElementById('lg-send-form-btn').addEventListener('click', sendToForm);
