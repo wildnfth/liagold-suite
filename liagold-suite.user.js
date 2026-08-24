@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.38
-// @description  v1.0.38: Faster bulk Kirim ke Form (observer wait, adaptive batch)
+// @version      1.0.39
+// @description  v1.0.39: Keep scanner focus on Tampermonkey kode barang input
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -304,6 +304,23 @@ const LG = {
       if (scan && scan.trayId != null && scan.trayId !== '') return String(scan.trayId) === tray;
       return false;
     });
+  },
+  shouldBounceScanFocus({
+    panelVisible,
+    targetId,
+    insidePanel,
+    tagName,
+    inputType,
+  } = {}) {
+    if (!panelVisible) return false;
+    if (targetId === 'lg-scan-input') return false;
+    const tag = String(tagName || '').toLowerCase();
+    const type = String(inputType || 'text').toLowerCase();
+    const isPanelTextField = tag === 'textarea' || tag === 'select'
+      || (tag === 'input' && type !== 'checkbox' && type !== 'radio' && type !== 'button'
+        && type !== 'submit' && type !== 'reset' && type !== 'image' && type !== 'file' && type !== 'hidden');
+    if (insidePanel && isPanelTextField) return false;
+    return true;
   },
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
@@ -3323,7 +3340,6 @@ if (!input) return false;
 Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, code);
 input.dispatchEvent(new Event('input', { bubbles: true }));
 input.dispatchEvent(new Event('change', { bubbles: true }));
-input.focus();
 return true;
 }
 function clickSearchBtn() {
@@ -3506,7 +3522,9 @@ let changed = false;
 const t0 = Date.now();
 if (filled) {
 clickSearchBtn();
+focusScanInput();
 changed = await waitForFormFill(beforeCount, beforeSig, LG.nextFormWaitTimeout(processed > 0));
+focusScanInput();
 }
 lastFillMs = Date.now() - t0;
 if (changed) presentSet.add(lc);
@@ -3530,6 +3548,7 @@ isStoppingForm = false;
 try { updateStats(); } catch (e) {}
 try { renderLog(); } catch (e) {}
 try { applyFilters(); } catch (e) {}
+focusScanInput();
 }
 if (processed > 0 && !isStoppingForm && !exitedEarly && formQueue.length === 0) {
 updateStatus(`✅ ${processed} kode berhasil diinput ke form.`);
@@ -4382,6 +4401,7 @@ document.getElementById('lg-tray-info').textContent = info
 ? `Baki ${info.trayCode} · ${info.count} barang${val === 'all' ? ' · ⚠️ pilih baki spesifik untuk scan' : ' · ✅ siap scan'}`
 : (val === 'all' ? '⚠️ Pilih baki spesifik untuk memulai scan' : '');
 loadTrayData(val);
+focusScanInput();
 }
 async function checkSoldProduct(cp) {
 try {
@@ -4494,8 +4514,7 @@ if (btn) {
 btn.disabled = false;
 btn.textContent = 'CEK';
 }
-const input = document.getElementById('lg-scan-input');
-if (input) input.focus();
+focusScanInput();
 }
 async function doScanInternal(code) {
 if (!traySelected) {
@@ -4956,6 +4975,24 @@ localStorage.setItem('lg_batchDelay', batchDelay);
 }
 updateStatus(`⚙️ Batch settings: ${batchSize} barang/batch, ${batchDelay}ms delay`);
 }
+function focusScanInput() {
+if (!panelVisible) return;
+const input = document.getElementById('lg-scan-input');
+if (input && document.activeElement !== input) input.focus({ preventScroll: true });
+}
+function onScanFocusIn(e) {
+const t = e.target;
+if (!t || t.nodeType !== 1) return;
+if (!LG.shouldBounceScanFocus({
+panelVisible,
+targetId: t.id || '',
+insidePanel: typeof t.closest === 'function' && !!t.closest('#lg-panel'),
+tagName: t.tagName || '',
+inputType: t.type || '',
+})) return;
+focusScanInput();
+requestAnimationFrame(focusScanInput);
+}
 function togglePanel() {
 panelVisible = !panelVisible;
 const p = document.getElementById('lg-panel');
@@ -4964,7 +5001,7 @@ if (panelVisible) {
 p.style.display = 'block';
 f.textContent = '✕';
 f.style.background = '#dc2626';
-setTimeout(() => document.getElementById('lg-scan-input')?.focus(), 100);
+setTimeout(focusScanInput, 100);
 } else {
 p.style.display = 'none';
 f.textContent = '📦';
@@ -4984,6 +5021,7 @@ function injectUI() {
 document.getElementById('lg-panel')?.remove();
 document.getElementById('lg-fab')?.remove();
 document.removeEventListener('click', onDocClick);
+document.removeEventListener('focusin', onScanFocusIn, true);
 const panel = document.createElement('div');
 panel.id = 'lg-panel';
 panel.style.cssText = `position:fixed;top:0;right:0;width:50vw;min-width:500px;height:100vh;background:#f8fafc;color:#1e293b;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px;overflow-y:auto;z-index:99999;border-left:1px solid #e2e8f0;box-shadow:-4px 0 24px rgba(0,0,0,0.08);padding:24px;display:none;`;
@@ -4991,7 +5029,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v38</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v39</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
@@ -5161,6 +5199,7 @@ if (first) first.click();
 if (e.key === 'Escape') trayDrop.style.display = 'none';
 });
 document.addEventListener('click', onDocClick);
+document.addEventListener('focusin', onScanFocusIn, true);
 panel.querySelectorAll('.lg-scan-tab').forEach(tab => {
 tab.addEventListener('click', () => {
 scanFilter = tab.dataset.val;
