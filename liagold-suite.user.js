@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.44
-// @description  v1.0.44: Fill scan input from product photo modal
+// @version      1.0.45
+// @description  v1.0.45: Photo modal Isi ke scan auto-submits
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -4862,9 +4862,10 @@ document.getElementById('lg-img-close-btn').addEventListener('click', () => ov.r
 const fill = document.getElementById('lg-img-fill-btn');
 if (fill) {
 fill.addEventListener('click', () => {
-const inp = document.getElementById('lg-scan-input');
-if (inp) inp.value = code;
 ov.remove();
+enqueueScan(code);
+const inp = document.getElementById('lg-scan-input');
+if (inp) inp.value = '';
 focusScanInput();
 });
 }
@@ -5156,7 +5157,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v44</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v45</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
