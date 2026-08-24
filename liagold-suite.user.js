@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.43
-// @description  v1.0.43: Import Sesuai form items into scanner
+// @version      1.0.44
+// @description  v1.0.44: Fill scan input from product photo modal
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -4754,7 +4754,7 @@ const s = Object.values(ST).find(x => x.label === l.status) || ST.TIDAK_ADA;
 return `<tr style="border-bottom:1px solid #f1f5f9;">
 <td style="padding:6px 8px;font-size:10px;color:#94a3b8;white-space:nowrap;">${esc(l.time)}</td>
 <td style="padding:6px 8px;"><code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:10px;border:1px solid #e2e8f0;">${esc(l.scanCode)}</code></td>
-<td style="padding:6px 8px;font-size:11px;">${l.codeProduct !== '-' ? `<a href="#" class="lg-img-link" data-img="${escAttr(l.image)}" data-name="${escAttr(l.name)}" style="color:#2563eb;text-decoration:none;font-weight:600;">${esc(l.codeProduct)}</a>` : '-'}</td>
+<td style="padding:6px 8px;font-size:11px;">${l.codeProduct !== '-' ? `<a href="#" class="lg-img-link" data-img="${escAttr(l.image)}" data-name="${escAttr(l.name)}" data-code="${escAttr(l.codeProduct)}" style="color:#2563eb;text-decoration:none;font-weight:600;">${esc(l.codeProduct)}</a>` : '-'}</td>
 <td style="padding:6px 8px;font-size:11px;max-width:100px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(l.name)}</td>
 <td style="padding:6px 8px;font-size:10px;text-align:center;color:#64748b;">${esc(l.tray)}</td>
 <td style="padding:6px 8px;font-size:10px;text-align:center;color:#64748b;">${esc(l.by || '-')}</td>
@@ -4795,7 +4795,7 @@ el.innerHTML = filteredProducts.map((p, i) => {
 const sc = scannedCodes.has(String(p.codeProduct).toLowerCase());
 return `<tr style="${sc ? 'opacity:0.45;background:#f0fdf4;' : ''}border-bottom:1px solid #f1f5f9;">
 <td style="padding:5px 8px;text-align:center;font-size:10px;color:#94a3b8;">${i + 1}</td>
-<td style="padding:5px 8px;"><a href="#" class="lg-img-link" data-img="${escAttr(p.image)}" data-name="${escAttr(p.name)}" style="color:#2563eb;text-decoration:none;font-weight:600;font-size:11px;font-family:monospace;">${esc(p.codeProduct)}</a></td>
+<td style="padding:5px 8px;"><a href="#" class="lg-img-link" data-img="${escAttr(p.image)}" data-name="${escAttr(p.name)}" data-code="${escAttr(p.codeProduct)}" style="color:#2563eb;text-decoration:none;font-weight:600;font-size:11px;font-family:monospace;">${esc(p.codeProduct)}</a></td>
 <td style="padding:5px 8px;font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</td>
 <td style="padding:5px 8px;text-align:center;font-size:10px;color:#64748b;">${esc(p.trayCode)}</td>
 <td style="padding:5px 8px;text-align:center;font-size:10px;">${p.weight} gr</td>
@@ -4831,7 +4831,7 @@ el.innerHTML = filteredProducts.map(l => {
 const s = Object.values(ST).find(x => x.label === l.status) || ST.TIDAK_ADA;
 return `<tr style="border-bottom:1px solid #f1f5f9;">
 <td style="padding:5px 8px;font-size:10px;color:#94a3b8;white-space:nowrap;">${esc(l.time || '-')}</td>
-<td style="padding:5px 8px;">${l.codeProduct && l.codeProduct !== '-' ? `<a href="#" class="lg-img-link" data-img="${escAttr(l.image)}" data-name="${escAttr(l.name)}" style="color:#2563eb;text-decoration:none;font-weight:600;font-size:11px;font-family:monospace;">${esc(l.codeProduct)}</a>` : '-'}</td>
+<td style="padding:5px 8px;">${l.codeProduct && l.codeProduct !== '-' ? `<a href="#" class="lg-img-link" data-img="${escAttr(l.image)}" data-name="${escAttr(l.name)}" data-code="${escAttr(l.codeProduct)}" style="color:#2563eb;text-decoration:none;font-weight:600;font-size:11px;font-family:monospace;">${esc(l.codeProduct)}</a>` : '-'}</td>
 <td style="padding:5px 8px;font-size:11px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(l.name || '-')}</td>
 <td style="padding:5px 8px;text-align:center;font-size:10px;color:#64748b;">${esc(l.tray || '-')}</td>
 <td style="padding:5px 8px;text-align:center;font-size:10px;color:#64748b;">${esc(l.by || '-')}</td>
@@ -4840,28 +4840,40 @@ return `<tr style="border-bottom:1px solid #f1f5f9;">
 }).join('');
 bindImageLinks(el);
 }
-function showImageModal(imgUrl, name) {
+function showImageModal(imgUrl, name, code) {
 let ov = document.getElementById('lg-img-overlay');
 if (ov) ov.remove();
 ov = document.createElement('div');
 ov.id = 'lg-img-overlay';
 ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100000;display:flex;align-items:center;justify-content:center;cursor:pointer;';
+const fillBtn = code
+? `<button id="lg-img-fill-btn" style="padding:8px 20px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">Isi ke scan</button>`
+: '';
 ov.innerHTML = `<div style="background:#fff;border-radius:12px;padding:24px;max-width:520px;width:90%;text-align:center;cursor:default;box-shadow:0 20px 60px rgba(0,0,0,0.25);animation:lgPop .18s ease;">
 <div style="font-weight:700;font-size:14px;color:#1e293b;margin-bottom:14px;">${esc(name || 'Produk')}</div>
 ${imgUrl ? `<img src="${escAttr(imgUrl)}" style="max-width:100%;max-height:400px;border-radius:8px;border:1px solid #e2e8f0;" onerror="this.outerHTML='<div style=\\'padding:40px;color:#94a3b8;\\'>Gambar tidak tersedia</div>'" />` : '<div style="padding:40px;color:#94a3b8;">Gambar tidak tersedia</div>'}
-<div style="margin-top:16px;"><button id="lg-img-close-btn" style="padding:8px 28px;background:#1e293b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Tutup</button></div>
+<div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">${fillBtn}<button id="lg-img-close-btn" style="padding:8px 28px;background:#1e293b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Tutup</button></div>
 </div>`;
 ov.addEventListener('click', e => {
 if (e.target === ov) ov.remove();
 });
 document.body.appendChild(ov);
 document.getElementById('lg-img-close-btn').addEventListener('click', () => ov.remove());
+const fill = document.getElementById('lg-img-fill-btn');
+if (fill) {
+fill.addEventListener('click', () => {
+const inp = document.getElementById('lg-scan-input');
+if (inp) inp.value = code;
+ov.remove();
+focusScanInput();
+});
+}
 }
 function bindImageLinks(c) {
 c.querySelectorAll('.lg-img-link').forEach(a => {
 a.onclick = e => {
 e.preventDefault();
-showImageModal(a.dataset.img, a.dataset.name);
+showImageModal(a.dataset.img, a.dataset.name, a.dataset.code || '');
 };
 });
 }
@@ -5144,7 +5156,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v43</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v44</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
