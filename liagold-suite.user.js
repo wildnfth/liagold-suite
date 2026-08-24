@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.41
-// @description  v1.0.41: Show Stop only while form fill is running
+// @version      1.0.42
+// @description  v1.0.42: Confirm when Kirim ke Form is already in sync
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -4927,6 +4927,7 @@ LG.reconcileFilledCodes(formFilledCodes, eligible, formTextLower);
 const missing = LG.findMissingFormCodes(eligible, formTextLower, formFilledCodes);
 const already = eligible.length - missing.length;
 if (!missing.length) {
+confirm(`📊 Hasil pemeriksaan form (baki aktif):\n✅ Sudah ada di form : ${already} barang\n📤 Belum ada di form : 0 barang\n\nSudah sinkron. Tidak ada yang perlu dikirim.`);
 updateStatus(`✅ Semua ${eligible.length} barang baki ini sudah ada di form.`);
 return;
 }
@@ -5018,7 +5019,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v41</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v42</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
