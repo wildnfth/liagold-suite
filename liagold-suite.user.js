@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.42
-// @description  v1.0.42: Confirm when Kirim ke Form is already in sync
+// @version      1.0.43
+// @description  v1.0.43: Import Sesuai form items into scanner
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -321,6 +321,47 @@ const LG = {
         && type !== 'submit' && type !== 'reset' && type !== 'image' && type !== 'file' && type !== 'hidden');
     if (insidePanel && isPanelTextField) return false;
     return true;
+  },
+  parseSesuaiFormCode(raw) {
+    const s = String(raw || '').trim().replace(/,\s*$/, '').trim();
+    if (!s) return null;
+    const weighed = s.match(/^([A-Za-z0-9]+)-[\d.]+gr$/i);
+    if (weighed) return weighed[1];
+    if (/^[A-Za-z0-9]+$/.test(s)) return s;
+    return null;
+  },
+  collectSesuaiFormCodes(raws) {
+    const out = [];
+    const seen = new Set();
+    for (const raw of raws || []) {
+      const code = LG.parseSesuaiFormCode(raw);
+      if (!code) continue;
+      const lc = code.toLowerCase();
+      if (seen.has(lc)) continue;
+      seen.add(lc);
+      out.push(code);
+    }
+    return out;
+  },
+  planFormImport({ formCodes, scannedSet, productByCode, selectedTray } = {}) {
+    const already = [];
+    const toImport = [];
+    const unknown = [];
+    const tray = selectedTray == null ? '' : String(selectedTray);
+    for (const code of formCodes || []) {
+      const lc = String(code).toLowerCase();
+      if (scannedSet && scannedSet.has(lc)) {
+        already.push(code);
+        continue;
+      }
+      const product = productByCode && productByCode.get(lc);
+      if (!product || String(product.trayId) !== tray) {
+        unknown.push(code);
+        continue;
+      }
+      toImport.push(code);
+    }
+    return { already, toImport, unknown };
   },
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
@@ -4936,6 +4977,90 @@ LG.beginFormSend(formQueue, formQueuedCodes, formFilledCodes, missing);
 updateStatus(`📤 Mengirim ${missing.length} barang ke form (batch: ${batchSize}, delay: ${batchDelay}ms)...`);
 processFormQueue();
 }
+function getSesuaiFormRaws() {
+const labels = document.querySelectorAll('.list-section label');
+for (const label of labels) {
+if (!/^daftar barang sesuai$/i.test((label.textContent || '').trim())) continue;
+const col = label.parentElement;
+const ul = col && col.querySelector('ul.product-item');
+if (!ul) return [];
+return [...ul.querySelectorAll('a')].map((a) => (a.textContent || '').trim());
+}
+return [];
+}
+async function importFromForm() {
+if (isProcessingForm) {
+updateStatus('⚠️ Proses sedang berjalan. Klik "⏹ Stop" untuk menghentikan.');
+return;
+}
+if (!getFormInput()) {
+updateStatus('❌ Form tidak ditemukan. Buka /stock-opname/create.');
+return;
+}
+if (!selectedTray || selectedTray === 'all') {
+updateStatus('⚠️ Pilih baki dulu. Ambil dari Form tidak jalan di Semua Baki.');
+return;
+}
+updateStatus('🔍 Membaca Daftar Barang Sesuai…');
+const formCodes = LG.collectSesuaiFormCodes(getSesuaiFormRaws());
+const plan = LG.planFormImport({
+formCodes,
+scannedSet: scannedCodes,
+productByCode: productMap,
+selectedTray,
+});
+const summary = `📊 Ambil dari form (baki aktif):\n✅ Sudah di script : ${plan.already.length}\n📥 Akan diimpor : ${plan.toImport.length}\n❓ Tidak dikenal di baki : ${plan.unknown.length}`;
+if (!plan.toImport.length) {
+confirm(summary + '\n\nSudah sinkron. Tidak ada yang perlu diambil.');
+updateStatus(formCodes.length
+? `✅ Semua ${plan.already.length} barang form sudah ada di script.`
+: '⚠️ Form tidak punya Daftar Barang Sesuai.');
+return;
+}
+if (!confirm(summary + '\nLanjutkan?')) return;
+const now = new Date();
+let imported = 0;
+for (const code of plan.toImport) {
+const p = productMap.get(String(code).toLowerCase());
+if (!p) continue;
+const lc = String(p.codeProduct).toLowerCase();
+const logEntry = {
+time: now.toLocaleString('id-ID'),
+timeIso: now.toISOString(),
+scanCode: p.codeProduct,
+codeProduct: p.codeProduct,
+code: p.code,
+name: p.name,
+tray: p.trayCode,
+image: p.image,
+status: ST.MASUK.label,
+by: myName || '',
+};
+scanLog.unshift(logEntry);
+scannedCodes.add(lc);
+formFilledCodes.add(lc);
+if (isMulti()) pendingLocalScans.add(lc);
+imported++;
+if (isMulti()) {
+await pushScanToCloud({
+by: myName,
+time: now.toISOString(),
+status: ST.MASUK.label,
+codeProduct: p.codeProduct,
+code: p.code,
+name: p.name,
+tray: p.trayCode,
+image: p.image,
+});
+}
+}
+if (scanLog.length > MAX_SCAN_LOG) scanLog = scanLog.slice(0, MAX_SCAN_LOG);
+if (isMulti()) debouncedPersist();
+else persistScanLog();
+scheduleRender();
+updateLastScanAt();
+updateStatus(`✅ ${imported} barang diambil dari form.`);
+}
 function syncStopFormButton() {
 const btn = document.getElementById('lg-stop-form-btn');
 if (btn) btn.hidden = !isProcessingForm;
@@ -5019,7 +5144,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v42</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v43</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
@@ -5080,6 +5205,7 @@ style="width:70px;padding:5px 8px;border-radius:4px;border:1px solid #cbd5e1;fon
 </div>
 <div style="display:flex;gap:6px;flex-wrap:wrap;">
 <button id="lg-send-form-btn" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">📤 Kirim ke Form</button>
+<button id="lg-import-form-btn" style="padding:8px 16px;background:#0f766e;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">📥 Ambil dari Form</button>
 <button id="lg-stop-form-btn" hidden style="padding:8px 16px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">⏹ Stop</button>
 <button id="lg-reset-btn" style="padding:8px 16px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">🔄 Reset Progress</button>
 </div>
@@ -5163,6 +5289,7 @@ inp.value = '';
 document.getElementById('lg-reset-btn').addEventListener('click', resetProgress);
 document.getElementById('lg-sync-btn').addEventListener('click', syncTrayList);
 document.getElementById('lg-send-form-btn').addEventListener('click', sendToForm);
+document.getElementById('lg-import-form-btn').addEventListener('click', importFromForm);
 document.getElementById('lg-stop-form-btn').addEventListener('click', stopFormQueue);
 syncStopFormButton();
 document.getElementById('lg-apply-batch-btn').addEventListener('click', updateBatchSettings);
