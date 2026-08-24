@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.40
-// @description  v1.0.40: Remove scanner Export CSV
+// @version      1.0.41
+// @description  v1.0.41: Show Stop only while form fill is running
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -3464,6 +3464,7 @@ return;
 }
 isProcessingForm = true;
 isStoppingForm = false;
+syncStopFormButton();
 formRetryCount = 0;
 let processed = 0;
 let batchCount = 0;
@@ -3545,6 +3546,7 @@ await new Promise((r) => requestAnimationFrame(() => r()));
 restoreFormList();
 isProcessingForm = false;
 isStoppingForm = false;
+syncStopFormButton();
 try { updateStats(); } catch (e) {}
 try { renderLog(); } catch (e) {}
 try { applyFilters(); } catch (e) {}
@@ -4933,6 +4935,10 @@ LG.beginFormSend(formQueue, formQueuedCodes, formFilledCodes, missing);
 updateStatus(`📤 Mengirim ${missing.length} barang ke form (batch: ${batchSize}, delay: ${batchDelay}ms)...`);
 processFormQueue();
 }
+function syncStopFormButton() {
+const btn = document.getElementById('lg-stop-form-btn');
+if (btn) btn.hidden = !isProcessingForm;
+}
 function stopFormQueue() {
 if (isProcessingForm) {
 isStoppingForm = true;
@@ -5012,7 +5018,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v40</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v41</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
@@ -5073,7 +5079,7 @@ style="width:70px;padding:5px 8px;border-radius:4px;border:1px solid #cbd5e1;fon
 </div>
 <div style="display:flex;gap:6px;flex-wrap:wrap;">
 <button id="lg-send-form-btn" style="padding:8px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">📤 Kirim ke Form</button>
-<button id="lg-stop-form-btn" style="padding:8px 16px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">⏹ Stop</button>
+<button id="lg-stop-form-btn" hidden style="padding:8px 16px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">⏹ Stop</button>
 <button id="lg-reset-btn" style="padding:8px 16px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;">🔄 Reset Progress</button>
 </div>
 </div>
@@ -5157,6 +5163,7 @@ document.getElementById('lg-reset-btn').addEventListener('click', resetProgress)
 document.getElementById('lg-sync-btn').addEventListener('click', syncTrayList);
 document.getElementById('lg-send-form-btn').addEventListener('click', sendToForm);
 document.getElementById('lg-stop-form-btn').addEventListener('click', stopFormQueue);
+syncStopFormButton();
 document.getElementById('lg-apply-batch-btn').addEventListener('click', updateBatchSettings);
 document.getElementById('lg-autofill').addEventListener('change', e => {
 autoFillForm = e.target.checked;
