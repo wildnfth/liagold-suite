@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.49
-// @description  v1.0.49: Show code and weight on photo modal
+// @version      1.0.50
+// @description  v1.0.50: CodeProduct scan suggestions
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -452,6 +452,50 @@ const LG = {
     const product = productByCode.get(String(code).toLowerCase());
     const fallback = product == null ? NaN : Number(product.weight);
     return Number.isFinite(fallback) && fallback > 0 ? fallback : null;
+  },
+  truncateSuggestionName(name, maxLen) {
+    const s = String(name || '').trim();
+    const max = Number(maxLen);
+    if (!Number.isFinite(max) || max <= 1) return s;
+    if (s.length <= max) return s;
+    return s.slice(0, max - 1) + '…';
+  },
+  filterCodeSuggestions({ query, products, limit, maxNameLen } = {}) {
+    const q = String(query || '').trim().toLowerCase();
+    if (q.length < 2) return [];
+    const lim = limit == null ? 8 : Number(limit);
+    const nameLen = maxNameLen == null ? 22 : maxNameLen;
+    const scored = [];
+    for (const p of products || []) {
+      const code = String(p && p.codeProduct || '');
+      const lc = code.toLowerCase();
+      if (!lc.includes(q)) continue;
+      let rank = 2;
+      if (lc.startsWith(q)) rank = 0;
+      else if (lc.endsWith(q)) rank = 1;
+      scored.push({
+        rank,
+        code,
+        name: LG.truncateSuggestionName(p && p.name, nameLen),
+        weight: p && p.weight,
+      });
+    }
+    scored.sort((a, b) => a.rank - b.rank || a.code.localeCompare(b.code));
+    return scored.slice(0, lim).map(({ code, name, weight }) => ({ code, name, weight }));
+  },
+  nextSuggestionScrollTop({
+    scrollTop,
+    viewHeight,
+    itemTop,
+    itemBottom,
+  } = {}) {
+    const top = Number(scrollTop) || 0;
+    const view = Number(viewHeight) || 0;
+    const iTop = Number(itemTop) || 0;
+    const iBot = Number(itemBottom) || 0;
+    if (iTop < top) return iTop;
+    if (iBot > top + view) return iBot - view;
+    return top;
   },
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
@@ -3164,6 +3208,9 @@ let selectedTray = 'all';
 let traySelected = false;
 let pendingFormTraySelect = false;
 let applyFormTrayId = 0;
+let suggestItems = [];
+let suggestIndex = -1;
+let suggestIgnoreHover = false;
 let scanFilter = 'all';
 let statusFilter = 'none';
 let autoFillForm = true;
@@ -5325,6 +5372,84 @@ if (!e.target.closest('#lg-tray-search') && !e.target.closest('#lg-tray-dropdown
 const dd = document.getElementById('lg-tray-dropdown');
 if (dd) dd.style.display = 'none';
 }
+if (!e.target.closest('#lg-scan-input') && !e.target.closest('#lg-suggest')) hideSuggestions();
+}
+function hideSuggestions() {
+const box = document.getElementById('lg-suggest');
+if (box) {
+box.style.display = 'none';
+box.innerHTML = '';
+}
+suggestItems = [];
+suggestIndex = -1;
+suggestIgnoreHover = false;
+}
+function pickSuggestion(code) {
+if (!code) return;
+hideSuggestions();
+const inp = document.getElementById('lg-scan-input');
+if (inp) inp.value = '';
+enqueueScan(code);
+focusScanInput();
+}
+function renderSuggestions(query) {
+const box = document.getElementById('lg-suggest');
+if (!box) return;
+suggestIndex = -1;
+suggestItems = LG.filterCodeSuggestions({
+query,
+products: allProducts,
+limit: 8,
+maxNameLen: 22,
+});
+if (!suggestItems.length) {
+hideSuggestions();
+return;
+}
+if (suggestIndex >= suggestItems.length) suggestIndex = suggestItems.length - 1;
+box.innerHTML = suggestItems.map((item, i) => {
+const on = i === suggestIndex;
+const w = Number(item.weight);
+const wTxt = Number.isFinite(w) && w > 0 ? `${w} gr` : '';
+return `<div class="lg-suggest-opt" data-idx="${i}" style="display:flex;align-items:baseline;gap:8px;padding:8px 10px;cursor:pointer;background:${on ? '#eff6ff' : '#fff'};border-bottom:1px solid #f1f5f9;">
+<span style="font-family:ui-monospace,monospace;font-weight:700;font-size:12px;color:#1e293b;white-space:nowrap;">${esc(item.code)}</span>
+<span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#1e293b;">${esc(item.name)}</span>
+<span style="font-size:12px;font-weight:700;color:#2563eb;white-space:nowrap;">${esc(wTxt)}</span>
+</div>`;
+}).join('');
+box.style.display = 'block';
+box.querySelectorAll('.lg-suggest-opt').forEach(opt => {
+opt.addEventListener('mousedown', e => e.preventDefault());
+opt.addEventListener('mouseenter', () => {
+if (suggestIgnoreHover) return;
+highlightSuggest(Number(opt.dataset.idx));
+});
+opt.addEventListener('click', () => {
+const item = suggestItems[Number(opt.dataset.idx)];
+if (item) pickSuggestion(item.code);
+});
+});
+}
+function highlightSuggest(idx, opts) {
+suggestIndex = idx;
+const box = document.getElementById('lg-suggest');
+if (!box) return;
+let active = null;
+box.querySelectorAll('.lg-suggest-opt').forEach(opt => {
+const on = Number(opt.dataset.idx) === suggestIndex;
+opt.style.background = on ? '#eff6ff' : '#fff';
+if (on) active = opt;
+});
+if (opts && opts.scroll && active) {
+suggestIgnoreHover = true;
+const nextTop = LG.nextSuggestionScrollTop({
+scrollTop: box.scrollTop,
+viewHeight: box.clientHeight,
+itemTop: active.offsetTop,
+itemBottom: active.offsetTop + active.offsetHeight,
+});
+if (nextTop !== box.scrollTop) box.scrollTop = nextTop;
+}
 }
 function injectUI() {
 document.getElementById('lg-panel')?.remove();
@@ -5338,7 +5463,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v49</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v50</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
@@ -5368,9 +5493,12 @@ style="width:100%;padding:10px 12px;border-radius:6px;border:1px solid #cbd5e1;f
 <button id="lg-clear-filter-btn" style="padding:5px 12px;background:#2563eb;color:#fff;border:none;border-radius:5px;cursor:pointer;font-size:11px;font-weight:700;white-space:nowrap;">✕ Reset Filter</button>
 </div>
 <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:14px;margin-bottom:12px;">
-<div style="display:flex;gap:8px;">
+<div style="display:flex;gap:8px;align-items:flex-start;">
+<div style="flex:1;position:relative;">
 <input id="lg-scan-input" type="text" placeholder="Scan barcode / ketik CodeProduct lalu Enter…"
-style="flex:1;padding:12px 16px;border-radius:8px;border:2px solid #2563eb;font-size:15px;font-weight:600;color:#1e293b;" />
+style="width:100%;padding:12px 16px;border-radius:8px;border:2px solid #2563eb;font-size:15px;font-weight:600;color:#1e293b;" autocomplete="off" />
+<div id="lg-suggest" style="display:none;position:absolute;left:0;right:0;top:100%;margin-top:4px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;max-height:240px;overflow-y:auto;z-index:20;box-shadow:0 8px 20px rgba(15,23,42,0.12);"></div>
+</div>
 <button id="lg-scan-btn" style="padding:12px 20px;background:#2563eb;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:700;font-size:14px;">CEK</button>
 </div>
 <div style="margin-top:10px;">
@@ -5461,12 +5589,37 @@ fab.onmouseleave = () => fab.style.transform = 'scale(1)';
 document.body.appendChild(fab);
 fab.addEventListener('click', togglePanel);
 document.getElementById('lg-close').addEventListener('click', togglePanel);
+document.getElementById('lg-scan-input').addEventListener('input', e => {
+renderSuggestions(e.target.value);
+});
+document.getElementById('lg-suggest').addEventListener('mousemove', () => {
+suggestIgnoreHover = false;
+});
 document.getElementById('lg-scan-input').addEventListener('keydown', e => {
+if (e.key === 'ArrowDown' && suggestItems.length) {
+e.preventDefault();
+highlightSuggest(Math.min(suggestItems.length - 1, suggestIndex + 1), { scroll: true });
+return;
+}
+if (e.key === 'ArrowUp' && suggestItems.length) {
+e.preventDefault();
+highlightSuggest(Math.max(0, suggestIndex - 1), { scroll: true });
+return;
+}
+if (e.key === 'Escape') {
+hideSuggestions();
+return;
+}
 if (e.key === 'Enter') {
 e.preventDefault();
+if (suggestIndex >= 0 && suggestItems[suggestIndex]) {
+pickSuggestion(suggestItems[suggestIndex].code);
+return;
+}
 const inp = document.getElementById('lg-scan-input');
 const val = inp.value.trim();
 if (val) {
+hideSuggestions();
 enqueueScan(val);
 inp.value = '';
 }
@@ -5476,6 +5629,7 @@ document.getElementById('lg-scan-btn').addEventListener('click', () => {
 const inp = document.getElementById('lg-scan-input');
 const val = inp.value.trim();
 if (val) {
+hideSuggestions();
 enqueueScan(val);
 inp.value = '';
 }
