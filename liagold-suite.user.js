@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.48
-// @description  v1.0.48: Guard form-tray apply races and leftover dropdown
+// @version      1.0.49
+// @description  v1.0.49: Show code and weight on photo modal
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -436,6 +436,22 @@ const LG = {
   },
   shouldOpenFormTrayDropdown(opened) {
     return !opened;
+  },
+  formatPhotoCaption({ code, weight, name } = {}) {
+    const rawCode = code == null ? '' : String(code).trim();
+    const codeText = !rawCode || rawCode === '-' ? '' : rawCode;
+    const w = Number(weight);
+    const weightText = Number.isFinite(w) && w > 0 ? `${w} gr` : '';
+    const nameText = name == null ? '' : String(name).trim();
+    return { code: codeText, weight: weightText, name: nameText };
+  },
+  resolvePhotoWeight({ weight, code, productByCode } = {}) {
+    const direct = Number(weight);
+    if (Number.isFinite(direct) && direct > 0) return direct;
+    if (!code || !productByCode || typeof productByCode.get !== 'function') return null;
+    const product = productByCode.get(String(code).toLowerCase());
+    const fallback = product == null ? NaN : Number(product.weight);
+    return Number.isFinite(fallback) && fallback > 0 ? fallback : null;
   },
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
@@ -4949,7 +4965,7 @@ el.innerHTML = filteredProducts.map((p, i) => {
 const sc = scannedCodes.has(String(p.codeProduct).toLowerCase());
 return `<tr style="${sc ? 'opacity:0.45;background:#f0fdf4;' : ''}border-bottom:1px solid #f1f5f9;">
 <td style="padding:5px 8px;text-align:center;font-size:10px;color:#94a3b8;">${i + 1}</td>
-<td style="padding:5px 8px;"><a href="#" class="lg-img-link" data-img="${escAttr(p.image)}" data-name="${escAttr(p.name)}" data-code="${escAttr(p.codeProduct)}" style="color:#2563eb;text-decoration:none;font-weight:600;font-size:11px;font-family:monospace;">${esc(p.codeProduct)}</a></td>
+<td style="padding:5px 8px;"><a href="#" class="lg-img-link" data-img="${escAttr(p.image)}" data-name="${escAttr(p.name)}" data-code="${escAttr(p.codeProduct)}" data-weight="${escAttr(p.weight)}" style="color:#2563eb;text-decoration:none;font-weight:600;font-size:11px;font-family:monospace;">${esc(p.codeProduct)}</a></td>
 <td style="padding:5px 8px;font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</td>
 <td style="padding:5px 8px;text-align:center;font-size:10px;color:#64748b;">${esc(p.trayCode)}</td>
 <td style="padding:5px 8px;text-align:center;font-size:10px;">${p.weight} gr</td>
@@ -4994,17 +5010,21 @@ return `<tr style="border-bottom:1px solid #f1f5f9;">
 }).join('');
 bindImageLinks(el);
 }
-function showImageModal(imgUrl, name, code) {
+function showImageModal(imgUrl, name, code, weight) {
 let ov = document.getElementById('lg-img-overlay');
 if (ov) ov.remove();
 ov = document.createElement('div');
 ov.id = 'lg-img-overlay';
 ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:100000;display:flex;align-items:center;justify-content:center;cursor:pointer;';
-const fillBtn = code
+const cap = LG.formatPhotoCaption({ code, weight, name });
+const fillBtn = cap.code
 ? `<button id="lg-img-fill-btn" style="padding:8px 20px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;font-weight:600;">Isi ke scan</button>`
 : '';
+const title = cap.code
+? `<div style="font-weight:800;font-size:16px;color:#1e293b;font-family:ui-monospace,monospace;">${esc(cap.code)}</div>${cap.weight ? `<div style="font-size:14px;font-weight:700;color:#2563eb;margin-top:4px;">${esc(cap.weight)}</div>` : ''}${cap.name ? `<div style="font-size:12px;color:#1e293b;margin-top:4px;margin-bottom:14px;">${esc(cap.name)}</div>` : '<div style="margin-bottom:14px;"></div>'}`
+: `<div style="font-weight:700;font-size:14px;color:#1e293b;margin-bottom:14px;">${esc(cap.name || 'Produk')}</div>`;
 ov.innerHTML = `<div style="background:#fff;border-radius:12px;padding:24px;max-width:520px;width:90%;text-align:center;cursor:default;box-shadow:0 20px 60px rgba(0,0,0,0.25);animation:lgPop .18s ease;">
-<div style="font-weight:700;font-size:14px;color:#1e293b;margin-bottom:14px;">${esc(name || 'Produk')}</div>
+${title}
 ${imgUrl ? `<img src="${escAttr(imgUrl)}" style="max-width:100%;max-height:400px;border-radius:8px;border:1px solid #e2e8f0;" onerror="this.outerHTML='<div style=\\'padding:40px;color:#94a3b8;\\'>Gambar tidak tersedia</div>'" />` : '<div style="padding:40px;color:#94a3b8;">Gambar tidak tersedia</div>'}
 <div style="margin-top:16px;display:flex;gap:8px;justify-content:center;flex-wrap:wrap;">${fillBtn}<button id="lg-img-close-btn" style="padding:8px 28px;background:#1e293b;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px;">Tutup</button></div>
 </div>`;
@@ -5028,7 +5048,13 @@ function bindImageLinks(c) {
 c.querySelectorAll('.lg-img-link').forEach(a => {
 a.onclick = e => {
 e.preventDefault();
-showImageModal(a.dataset.img, a.dataset.name, a.dataset.code || '');
+const code = a.dataset.code || '';
+const weight = LG.resolvePhotoWeight({
+weight: a.dataset.weight,
+code,
+productByCode: productMap,
+});
+showImageModal(a.dataset.img, a.dataset.name, code, weight);
 };
 });
 }
@@ -5312,7 +5338,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v48</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v49</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
