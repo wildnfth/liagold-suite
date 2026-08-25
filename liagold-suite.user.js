@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.45
-// @description  v1.0.45: Photo modal Isi ke scan auto-submits
+// @version      1.0.46
+// @description  v1.0.46: Auto-select scanner tray from CUAN form
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -362,6 +362,41 @@ const LG = {
       toImport.push(code);
     }
     return { already, toImport, unknown };
+  },
+  parseFormTrayLabel(raw) {
+    const s = String(raw || '').trim();
+    if (!s) return null;
+    const idx = s.indexOf(' - ');
+    if (idx === -1) return s;
+    const code = s.slice(0, idx).trim();
+    return code || null;
+  },
+  matchTrayByCode(trayList, code) {
+    if (code == null || code === '') return null;
+    const needle = String(code).trim().toLowerCase();
+    if (!needle) return null;
+    return (trayList || []).find((t) => String(t.trayCode).toLowerCase() === needle) || null;
+  },
+  planAutoSelectFormTray({
+    formLabel,
+    trayList,
+    selectedTray,
+    trayListReady,
+  } = {}) {
+    const code = LG.parseFormTrayLabel(formLabel);
+    if (!code) return { action: 'skip', reason: 'no-form-tray' };
+    if (!trayListReady) return { action: 'pending', code };
+    const tray = LG.matchTrayByCode(trayList, code);
+    if (!tray) return { action: 'missing', code };
+    if (String(selectedTray) === String(tray.trayId)) {
+      return { action: 'skip', reason: 'already-selected', tray };
+    }
+    return { action: 'select', tray };
+  },
+  readFormTrayLabel(root) {
+    if (!root || typeof root.querySelector !== 'function') return '';
+    const el = root.querySelector('ng-select[formcontrolname="TrayId"] .ng-value-label');
+    return el ? String(el.textContent || '').trim() : '';
   },
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
@@ -3072,6 +3107,7 @@ let filteredProducts = [];
 let trayList = safeParseArray('lg_trayList', []);
 let selectedTray = 'all';
 let traySelected = false;
+let pendingFormTraySelect = false;
 let scanFilter = 'all';
 let statusFilter = 'none';
 let autoFillForm = true;
@@ -4347,6 +4383,7 @@ resetScanTabUI();
 renderTrayDropdown('');
 applyFilters();
 updateStatus(`✅ ${trayList.length} baki · ${allProducts.length} produk`);
+if (panelVisible || pendingFormTraySelect) autoSelectFormTray();
 } catch (e) {
 if (myLoadId !== currentLoadId) return;
 updateStatus(`⚠️ Gagal: ${e.message}`);
@@ -4445,6 +4482,26 @@ document.getElementById('lg-tray-info').textContent = info
 : (val === 'all' ? '⚠️ Pilih baki spesifik untuk memulai scan' : '');
 loadTrayData(val);
 focusScanInput();
+}
+function autoSelectFormTray() {
+const plan = LG.planAutoSelectFormTray({
+formLabel: LG.readFormTrayLabel(document),
+trayList,
+selectedTray,
+trayListReady: trayList.length > 0,
+});
+if (plan.action === 'pending') {
+pendingFormTraySelect = true;
+return;
+}
+pendingFormTraySelect = false;
+if (plan.action === 'missing') {
+updateStatus(`⚠️ Baki form "${plan.code}" tidak ada di daftar scanner`);
+return;
+}
+if (plan.action === 'select') {
+selectTray(String(plan.tray.trayId), `Baki ${plan.tray.trayCode}`);
+}
 }
 async function checkSoldProduct(cp) {
 try {
@@ -5129,6 +5186,7 @@ if (panelVisible) {
 p.style.display = 'block';
 f.textContent = '✕';
 f.style.background = '#dc2626';
+autoSelectFormTray();
 setTimeout(focusScanInput, 100);
 } else {
 p.style.display = 'none';
@@ -5157,7 +5215,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v45</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v46</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
