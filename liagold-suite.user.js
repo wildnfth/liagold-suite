@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.46
-// @description  v1.0.46: Auto-select scanner tray from CUAN form
+// @version      1.0.47
+// @description  v1.0.47: Sync CUAN form tray from scanner pick
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -397,6 +397,37 @@ const LG = {
     if (!root || typeof root.querySelector !== 'function') return '';
     const el = root.querySelector('ng-select[formcontrolname="TrayId"] .ng-value-label');
     return el ? String(el.textContent || '').trim() : '';
+  },
+  planSyncFormTray({
+    scannerTray,
+    scannerTrayCode,
+    formLabel,
+    fromFormAutoSelect,
+  } = {}) {
+    if (fromFormAutoSelect) return { action: 'skip', reason: 'from-form' };
+    if (scannerTray == null || scannerTray === '' || scannerTray === 'all') {
+      return { action: 'skip', reason: 'no-scanner-tray' };
+    }
+    const code = scannerTrayCode == null ? '' : String(scannerTrayCode).trim();
+    if (!code) return { action: 'skip', reason: 'no-scanner-tray' };
+    const formCode = LG.parseFormTrayLabel(formLabel);
+    if (!formCode) return { action: 'apply', code };
+    if (String(formCode).toLowerCase() === code.toLowerCase()) {
+      return { action: 'skip', reason: 'already-same' };
+    }
+    return { action: 'apply', code };
+  },
+  findFormTrayOption(root, code) {
+    if (!root || typeof root.querySelectorAll !== 'function') return null;
+    if (code == null || code === '') return null;
+    const needle = String(code).trim().toLowerCase();
+    if (!needle) return null;
+    const nodes = root.querySelectorAll('.ng-option');
+    for (const node of nodes) {
+      const parsed = LG.parseFormTrayLabel(node && node.textContent);
+      if (parsed && String(parsed).toLowerCase() === needle) return node;
+    }
+    return null;
   },
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
@@ -4470,7 +4501,7 @@ opt.addEventListener('mouseleave', () => opt.style.background = '#fff');
 opt.addEventListener('click', () => selectTray(opt.dataset.val, opt.dataset.label));
 });
 }
-function selectTray(val, label) {
+function selectTray(val, label, opts) {
 selectedTray = val;
 traySelected = (val !== 'all');
 statusFilter = 'none';
@@ -4481,6 +4512,45 @@ document.getElementById('lg-tray-info').textContent = info
 ? `Baki ${info.trayCode} · ${info.count} barang${val === 'all' ? ' · ⚠️ pilih baki spesifik untuk scan' : ' · ✅ siap scan'}`
 : (val === 'all' ? '⚠️ Pilih baki spesifik untuk memulai scan' : '');
 loadTrayData(val);
+focusScanInput();
+if (!opts || opts.syncForm !== false) syncFormTrayFromScanner();
+}
+function syncFormTrayFromScanner() {
+const info = trayList.find(t => String(t.trayId) === String(selectedTray));
+const plan = LG.planSyncFormTray({
+scannerTray: selectedTray,
+scannerTrayCode: info ? info.trayCode : '',
+formLabel: LG.readFormTrayLabel(document),
+});
+if (plan.action === 'skip') return;
+applyFormTray(plan.code);
+}
+async function applyFormTray(code) {
+const sel = document.querySelector('ng-select[formcontrolname="TrayId"]');
+if (!sel) {
+updateStatus('⚠️ Form baki tidak ditemukan');
+return;
+}
+const container = sel.querySelector('.ng-select-container') || sel;
+container.click();
+await sleep(80);
+let opt = LG.findFormTrayOption(document, code);
+if (!opt) {
+const input = sel.querySelector('input');
+if (input) {
+const desc = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value');
+if (desc && desc.set) desc.set.call(input, String(code));
+else input.value = String(code);
+input.dispatchEvent(new Event('input', { bubbles: true }));
+await sleep(80);
+opt = LG.findFormTrayOption(document, code);
+}
+}
+if (!opt) {
+updateStatus(`⚠️ Opsi baki ${code} tidak ada di form`);
+return;
+}
+opt.click();
 focusScanInput();
 }
 function autoSelectFormTray() {
@@ -4500,7 +4570,7 @@ updateStatus(`⚠️ Baki form "${plan.code}" tidak ada di daftar scanner`);
 return;
 }
 if (plan.action === 'select') {
-selectTray(String(plan.tray.trayId), `Baki ${plan.tray.trayCode}`);
+selectTray(String(plan.tray.trayId), `Baki ${plan.tray.trayCode}`, { syncForm: false });
 }
 }
 async function checkSoldProduct(cp) {
@@ -5215,7 +5285,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v46</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v47</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
