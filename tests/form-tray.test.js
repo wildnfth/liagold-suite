@@ -7,6 +7,8 @@ import {
   planSyncFormTray,
   readFormTrayLabel,
   findFormTrayOption,
+  planFormTrayApply,
+  shouldOpenFormTrayDropdown,
 } from '../lib/form-tray.js';
 
 describe('parseFormTrayLabel', () => {
@@ -186,5 +188,38 @@ describe('findFormTrayOption', () => {
   it('returns null when no option matches', () => {
     assert.equal(findFormTrayOption(optionsRoot(['8 - BAKI 8']), '11'), null);
     assert.equal(findFormTrayOption(null, '11'), null);
+  });
+});
+
+describe('planFormTrayApply', () => {
+  it('aborts a stale apply when a newer tray pick started', () => {
+    assert.deepEqual(planFormTrayApply({
+      myId: 1,
+      currentId: 2,
+      foundOption: true,
+    }), { action: 'abort' });
+  });
+
+  it('clicks the matching option when this apply is still current', () => {
+    assert.deepEqual(planFormTrayApply({
+      myId: 2,
+      currentId: 2,
+      foundOption: true,
+    }), { action: 'click' });
+  });
+
+  it('closes the leftover dropdown when no option matches', () => {
+    assert.deepEqual(planFormTrayApply({
+      myId: 2,
+      currentId: 2,
+      foundOption: false,
+    }), { action: 'close' });
+  });
+});
+
+describe('shouldOpenFormTrayDropdown', () => {
+  it('does not click-open when the form dropdown is already open', () => {
+    assert.equal(shouldOpenFormTrayDropdown(true), false);
+    assert.equal(shouldOpenFormTrayDropdown(false), true);
   });
 });

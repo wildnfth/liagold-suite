@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.47
-// @description  v1.0.47: Sync CUAN form tray from scanner pick
+// @version      1.0.48
+// @description  v1.0.48: Guard form-tray apply races and leftover dropdown
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -428,6 +428,14 @@ const LG = {
       if (parsed && String(parsed).toLowerCase() === needle) return node;
     }
     return null;
+  },
+  planFormTrayApply({ myId, currentId, foundOption } = {}) {
+    if (myId !== currentId) return { action: 'abort' };
+    if (foundOption) return { action: 'click' };
+    return { action: 'close' };
+  },
+  shouldOpenFormTrayDropdown(opened) {
+    return !opened;
   },
   paymentCacheKey(code, nonInvoice) {
     return (nonInvoice ? 'ni:' : 'inv:') + String(code || '');
@@ -3139,6 +3147,7 @@ let trayList = safeParseArray('lg_trayList', []);
 let selectedTray = 'all';
 let traySelected = false;
 let pendingFormTraySelect = false;
+let applyFormTrayId = 0;
 let scanFilter = 'all';
 let statusFilter = 'none';
 let autoFillForm = true;
@@ -4525,15 +4534,29 @@ formLabel: LG.readFormTrayLabel(document),
 if (plan.action === 'skip') return;
 applyFormTray(plan.code);
 }
+function isFormTrayDropdownOpen(sel) {
+return !!(sel && sel.classList && sel.classList.contains('ng-select-opened'));
+}
+function closeFormTrayDropdown(sel) {
+if (!isFormTrayDropdownOpen(sel)) return;
+sel.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', keyCode: 27, bubbles: true }));
+if (!isFormTrayDropdownOpen(sel)) return;
+const container = sel.querySelector('.ng-select-container') || sel;
+container.click();
+}
 async function applyFormTray(code) {
+const myId = ++applyFormTrayId;
 const sel = document.querySelector('ng-select[formcontrolname="TrayId"]');
 if (!sel) {
 updateStatus('⚠️ Form baki tidak ditemukan');
 return;
 }
+if (LG.shouldOpenFormTrayDropdown(isFormTrayDropdownOpen(sel))) {
 const container = sel.querySelector('.ng-select-container') || sel;
 container.click();
 await sleep(80);
+}
+if (LG.planFormTrayApply({ myId, currentId: applyFormTrayId, foundOption: true }).action === 'abort') return;
 let opt = LG.findFormTrayOption(document, code);
 if (!opt) {
 const input = sel.querySelector('input');
@@ -4543,10 +4566,14 @@ if (desc && desc.set) desc.set.call(input, String(code));
 else input.value = String(code);
 input.dispatchEvent(new Event('input', { bubbles: true }));
 await sleep(80);
+}
+}
+if (LG.planFormTrayApply({ myId, currentId: applyFormTrayId, foundOption: true }).action === 'abort') return;
 opt = LG.findFormTrayOption(document, code);
-}
-}
-if (!opt) {
+const step = LG.planFormTrayApply({ myId, currentId: applyFormTrayId, foundOption: !!opt });
+if (step.action === 'abort') return;
+if (step.action === 'close') {
+closeFormTrayDropdown(sel);
 updateStatus(`⚠️ Opsi baki ${code} tidak ada di form`);
 return;
 }
@@ -5285,7 +5312,7 @@ panel.innerHTML = `
 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;padding-bottom:12px;border-bottom:2px solid #e2e8f0;">
 <div>
 <div style="font-size:18px;font-weight:800;color:#1e293b;">📦 LiaGold Scanner</div>
-<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v47</b></div>
+<div style="font-size:11px;color:#64748b;margin-top:2px;">Stock Opname · Multiplayer + Merge Solo <b style="color:#16a34a;">v48</b></div>
 </div>
 <button id="lg-close" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#64748b;border-radius:6px;padding:6px 12px;cursor:pointer;font-size:14px;">✕</button>
 </div>
