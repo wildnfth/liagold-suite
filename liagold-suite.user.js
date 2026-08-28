@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.51
-// @description  v1.0.51: invoice payment fetch no longer treats map index as nonInvoice
+// @version      1.0.52
+// @description  v1.0.52: reject expired session join without waiting for expiryReady
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -35,6 +35,9 @@ const LG = {
     const remaining = LG.getRemainingTime(lastScanAt, now, ttlMs);
     if (remaining == null) return false;
     return remaining <= 0;
+  },
+  shouldRejectExpiredJoin(lastScanAt, now, ttlMs) {
+    return LG.isDataExpired(lastScanAt, now, ttlMs);
   },
   sanitizeKey(str) {
     return String(str).replace(/[.#$\[\]/]/g, '_');
@@ -3914,7 +3917,7 @@ return;
 }
 lastScanAt = meta.lastScanAt || meta.dibuat || null;
 sessionCreatedAt = meta.dibuat || null;
-if (isDataExpired()) {
+if (LG.shouldRejectExpiredJoin(lastScanAt)) {
 updateStatus('❌ Sesi "' + code + '" sudah EXPIRED (>12 jam tanpa scan).');
 return;
 }

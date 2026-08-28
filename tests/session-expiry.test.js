@@ -5,6 +5,7 @@ import {
   parseTimestamp,
   getRemainingTime,
   isDataExpired,
+  shouldRejectExpiredJoin,
 } from '../lib/session-expiry.js';
 
 const TTL = DATA_TTL_MS;
@@ -55,5 +56,21 @@ describe('isDataExpired', () => {
   it('is true only when timestamp is known and older than TTL', () => {
     const last = new Date(NOW - TTL - 1).toISOString();
     assert.equal(isDataExpired(last, NOW, TTL), true);
+  });
+});
+
+describe('shouldRejectExpiredJoin', () => {
+  it('rejects expired lastScanAt without waiting for a UI ready flag', () => {
+    const last = new Date(NOW - TTL - 1).toISOString();
+    assert.equal(shouldRejectExpiredJoin(last, NOW, TTL), true);
+  });
+
+  it('allows a session still within TTL', () => {
+    const last = new Date(NOW - 1000).toISOString();
+    assert.equal(shouldRejectExpiredJoin(last, NOW, TTL), false);
+  });
+
+  it('does not reject when lastScanAt is unknown', () => {
+    assert.equal(shouldRejectExpiredJoin(null, NOW, TTL), false);
   });
 });
