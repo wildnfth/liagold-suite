@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.54
-// @description  v1.0.54: keep in-flight multi scans in log during cloud sync
+// @version      1.0.55
+// @description  v1.0.55: await session reset DELETEs before clearing local flags
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -46,6 +46,19 @@ const LG = {
     const cp = String(codeProduct || '').toLowerCase();
     const ts = String(timestamp || '');
     return LG.sanitizeKey(cp + '_' + ts);
+  },
+  sessionResetUrls(base, sessionId) {
+    return ['history', 'scans', 'dupes'].map(
+      (node) => `${String(base).replace(/\/$/, '')}/opname/${sessionId}/${node}.json`
+    );
+  },
+  async deleteSessionNodes(fetchFn, urls) {
+    const results = await Promise.all(
+      urls.map((url) => fetchFn(url, { method: 'DELETE' }))
+    );
+    const bad = results.find((res) => !res || !res.ok);
+    if (bad) throw new Error(`HTTP ${bad.status || 0}`);
+    return results;
   },
   parseIdNumber(value) {
     if (typeof value === 'number') {
@@ -5161,12 +5174,11 @@ el.classList.remove('lg-result-anim');
 void el.offsetWidth;
 el.classList.add('lg-result-anim');
 }
-function resetProgress() {
+async function resetProgress() {
 if (isMulti()) {
 if (!confirm('Reset SEMUA progress sesi (untuk semua peserta)?')) return;
-fetch(`${FIREBASE}/opname/${sessionId}/history.json`, { method: 'DELETE' });
-fetch(`${FIREBASE}/opname/${sessionId}/scans.json`, { method: 'DELETE' });
-fetch(`${FIREBASE}/opname/${sessionId}/dupes.json`, { method: 'DELETE' });
+try {
+await LG.deleteSessionNodes(fetch, LG.sessionResetUrls(FIREBASE, sessionId));
 pendingLocalScans = new Set();
 knownCloudKeys = new Set();
 formFilledCodes = new Set();
@@ -5178,7 +5190,10 @@ statusFilter = 'none';
 lastScanAt = new Date().toISOString();
 fbPut(`/opname/${sessionId}/meta/lastScanAt`, lastScanAt).catch(() => {});
 updateCountdownDisplay();
-updateStatus('🔄 Mereset progress sesi…');
+updateStatus('🔄 Progress sesi direset.');
+} catch (e) {
+updateStatus('❌ Gagal reset progress: ' + e.message);
+}
 } else {
 if (!confirm('Reset semua progress scan?')) return;
 scanLog = [];
