@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.55
-// @description  v1.0.55: await session reset DELETEs before clearing local flags
+// @version      1.0.56
+// @description  v1.0.56: debounce EventSource onerror full-tree resync
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -59,6 +59,23 @@ const LG = {
     const bad = results.find((res) => !res || !res.ok);
     if (bad) throw new Error(`HTTP ${bad.status || 0}`);
     return results;
+  },
+  ES_CONNECTING: 0,
+  ES_OPEN: 1,
+  ES_CLOSED: 2,
+  ES_RECONNECT_DELAY_MS: 2500,
+  ES_RECREATE_AFTER: 5,
+  planEsOnError({ readyState, failCount }) {
+    const nextFailCount = failCount + 1;
+    const dead = readyState === LG.ES_CLOSED;
+    const recreate = dead && nextFailCount >= LG.ES_RECREATE_AFTER;
+    return {
+      nextFailCount,
+      cancelPending: true,
+      scheduleSync: dead && !recreate,
+      recreate,
+      delayMs: LG.ES_RECONNECT_DELAY_MS,
+    };
   },
   parseIdNumber(value) {
     if (typeof value === 'number') {
@@ -3278,6 +3295,7 @@ let participants = {};
 let dupeCount = 0;
 let es = null;
 let esFailCount = 0;
+let esReconnectTimer = null;
 let knownCloudKeys = new Set();
 let initialCloudSyncDone = false;
 let isDeletingSession = false;
@@ -4001,6 +4019,10 @@ cleanupSessionLocal();
 updateStatus('🔴 Keluar dari sesi. Mode solo.');
 }
 function cleanupSessionLocal() {
+if (esReconnectTimer) {
+clearTimeout(esReconnectTimer);
+esReconnectTimer = null;
+}
 if (es) {
 es.close();
 es = null;
@@ -4099,6 +4121,10 @@ updateStatus('🗑️ Sesi dihapus oleh peserta lain — kamu otomatis keluar.')
 alert(`🗑️ Sesi telah DIHAPUS oleh peserta lain.\nKamu otomatis kembali ke MODE SOLO.\nData scan di device ini tetap tersimpan lokal.`);
 }
 function listenSession() {
+if (esReconnectTimer) {
+clearTimeout(esReconnectTimer);
+esReconnectTimer = null;
+}
 if (es) es.close();
 esFailCount = 0;
 es = new EventSource(`${FIREBASE}/opname/${sessionId}.json`);
@@ -4312,10 +4338,27 @@ return;
 });
 es.onerror = () => {
 if (!sessionId) return;
-esFailCount++;
+const plan = LG.planEsOnError({
+readyState: es ? es.readyState : LG.ES_CLOSED,
+failCount: esFailCount,
+});
+esFailCount = plan.nextFailCount;
 updateStatus('⚠️ Koneksi terputus (percobaan ' + esFailCount + ')…');
-setTimeout(async () => {
+if (plan.cancelPending && esReconnectTimer) {
+clearTimeout(esReconnectTimer);
+esReconnectTimer = null;
+}
+if (!plan.scheduleSync && !plan.recreate) return;
+esReconnectTimer = setTimeout(async () => {
+esReconnectTimer = null;
 if (!sessionId) return;
+if (es && es.readyState !== EventSource.CLOSED) return;
+if (plan.recreate) {
+esFailCount = 0;
+updateStatus('🔄 Membuat ulang koneksi real-time…');
+listenSession();
+return;
+}
 try {
 const res = await fetch(`${FIREBASE}/opname/${sessionId}.json`);
 const data = await res.json();
@@ -4345,12 +4388,7 @@ updateStatus('🟢 Koneksi pulih, data disinkronkan.');
 } catch (e) {
 updateStatus('⚠️ Gagal re-sync.');
 }
-if (esFailCount >= 5) {
-esFailCount = 0;
-updateStatus('🔄 Membuat ulang koneksi real-time…');
-listenSession();
-}
-}, 2500);
+}, plan.delayMs);
 };
 }
 function onCloudUpdate() {
