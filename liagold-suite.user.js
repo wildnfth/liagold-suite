@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.53
-// @description  v1.0.53: paginate digit fallback in payment lookup
+// @version      1.0.54
+// @description  v1.0.54: keep in-flight multi scans in log during cloud sync
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -171,6 +171,21 @@ const LG = {
       set.add(String(row.codeProduct).toLowerCase());
     }
     return [...set];
+  },
+  mergeInflightScanLog(cloudEntries, localLog, cloudHistory) {
+    const keys = new Set(Object.keys(cloudHistory || {}));
+    const extra = [];
+    const seen = new Set();
+    for (const row of localLog || []) {
+      if (!row || !row.codeProduct) continue;
+      const key = LG.generateHistoryKey(row.codeProduct, row.timeIso || '');
+      if (keys.has(key) || seen.has(key)) continue;
+      seen.add(key);
+      extra.push(row);
+    }
+    const merged = (cloudEntries || []).concat(extra);
+    merged.sort((a, b) => String(b.timeIso || '').localeCompare(String(a.timeIso || '')));
+    return merged;
   },
   pickProductPrice(item) {
     if (!item || typeof item !== 'object') return 0;
@@ -4358,7 +4373,7 @@ found = true;
 });
 if (found) pendingLocalScans.delete(rawCode);
 });
-scanLog = historyEntries.sort((a, b) => (b.timeIso || '').localeCompare(a.timeIso || ''));
+scanLog = LG.mergeInflightScanLog(historyEntries, scanLog, cloudHistory);
 debouncedPersist();
 const newKeys = [];
 Object.keys(cloudHistory || {}).forEach(k => {

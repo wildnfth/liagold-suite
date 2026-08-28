@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseArrayJson, scannedCodesFromLog } from '../lib/scan-storage.js';
+import { parseArrayJson, scannedCodesFromLog, mergeInflightScanLog } from '../lib/scan-storage.js';
+import { generateHistoryKey } from '../lib/history-key.js';
 
 describe('parseArrayJson', () => {
   it('returns fallback for missing, corrupt, and non-array JSON', () => {
@@ -26,5 +27,34 @@ describe('scannedCodesFromLog', () => {
       { status: 'MASUK' },
     ]);
     assert.deepEqual(codes, ['abc']);
+  });
+});
+
+describe('mergeInflightScanLog', () => {
+  it('keeps a local in-flight row that is not in cloud history yet', () => {
+    const local = [{
+      codeProduct: 'PC1',
+      timeIso: '2026-08-19T00:00:00.000Z',
+      status: 'MASUK',
+    }];
+    const cloudEntries = [{
+      codeProduct: 'PC2',
+      timeIso: '2026-08-19T00:00:01.000Z',
+      status: 'MASUK',
+    }];
+    const merged = mergeInflightScanLog(cloudEntries, local, {});
+    assert.deepEqual(
+      merged.map((row) => row.codeProduct),
+      ['PC2', 'PC1']
+    );
+  });
+
+  it('drops a local row once its history key is in the cloud', () => {
+    const timeIso = '2026-08-19T00:00:00.000Z';
+    const local = [{ codeProduct: 'PC1', timeIso, status: 'MASUK' }];
+    const cloudEntries = [{ codeProduct: 'PC1', timeIso, status: 'MASUK' }];
+    const key = generateHistoryKey('PC1', timeIso);
+    const merged = mergeInflightScanLog(cloudEntries, local, { [key]: { codeProduct: 'PC1' } });
+    assert.deepEqual(merged.map((row) => row.codeProduct), ['PC1']);
   });
 });
