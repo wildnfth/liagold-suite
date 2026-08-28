@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
+// @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
 // @version      2.0.0
 // @description  v2.0.0: split CC≥15 functions into lib
