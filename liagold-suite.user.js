@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.50
-// @description  v1.0.50: CodeProduct scan suggestions
+// @version      1.0.51
+// @description  v1.0.51: invoice payment fetch no longer treats map index as nonInvoice
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -505,6 +505,9 @@ const LG = {
     if (itemCount < pageSize) return null;
     if (pageNumber + 1 >= maxPages) return null;
     return pageNumber + 1;
+  },
+  mapPaymentFetches(codes, fetchPayment, nonInvoice) {
+    return codes.map((code) => fetchPayment(code, nonInvoice));
   },
   randomBase36(length) {
     const alphabet = '0123456789abcdefghijklmnopqrstuvwxyz';
@@ -1941,7 +1944,7 @@ const LG = {
       });
 
       if (missing.length) {
-        Promise.all(missing.map(fetchPayment))
+        Promise.all(LG.mapPaymentFetches(missing, fetchPayment, false))
           .then(() => {
             scheduleUpdate(50);
           })
