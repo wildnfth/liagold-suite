@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.52
-// @description  v1.0.52: reject expired session join without waiting for expiryReady
+// @version      1.0.53
+// @description  v1.0.53: paginate digit fallback in payment lookup
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -508,6 +508,36 @@ const LG = {
     if (itemCount < pageSize) return null;
     if (pageNumber + 1 >= maxPages) return null;
     return pageNumber + 1;
+  },
+  paymentLookupFilters(code) {
+    const original = String(code || '');
+    const digits = original.replace(/\D/g, '');
+    if (digits && digits !== original) return [original, digits];
+    return [original];
+  },
+  async lookupPaymentPages({
+    filter,
+    pageSize,
+    maxPages,
+    fetchPage,
+    findItem,
+  }) {
+    let page = 0;
+    while (true) {
+      const json = await fetchPage(filter, page, pageSize);
+      const item = findItem(json);
+      const n = ((json && json.items) || []).length;
+      const next = LG.nextPaymentLookupPage({
+        found: !!item,
+        pageNumber: page,
+        itemCount: n,
+        pageSize,
+        maxPages,
+      });
+      if (item) return item;
+      if (next == null) return null;
+      page = next;
+    }
   },
   mapPaymentFetches(codes, fetchPayment, nonInvoice) {
     return codes.map((code) => fetchPayment(code, nonInvoice));
@@ -1255,31 +1285,16 @@ const LG = {
       try {
         const pageSize = 50;
         const maxPages = 5;
-        let json = null;
         let item = null;
-        let page = 0;
-        while (true) {
-          json = await fetchJson(build(code, page, pageSize));
-          item = findExactItem(json, code);
-          const n = ((json && json.items) || []).length;
-          const next = LG.nextPaymentLookupPage({
-            found: !!item,
-            pageNumber: page,
-            itemCount: n,
+        for (const filter of LG.paymentLookupFilters(code)) {
+          item = await LG.lookupPaymentPages({
+            filter,
             pageSize,
-            maxPages
+            maxPages,
+            fetchPage: (filter, page, pageSize) => fetchJson(build(filter, page, pageSize)),
+            findItem: (json) => findExactItem(json, code),
           });
-          if (item || next == null) break;
-          page = next;
-        }
-
-        if (!item) {
-          const digits = code.replace(/\D/g, '');
-
-          if (digits && digits !== code) {
-            json = await fetchJson(build(digits, 0, pageSize));
-            item = findExactItem(json, code);
-          }
+          if (item) break;
         }
 
         if (!item) {
