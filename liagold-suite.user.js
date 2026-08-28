@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.56
-// @description  v1.0.56: debounce EventSource onerror full-tree resync
+// @version      1.0.57
+// @description  v1.0.57: session join placeholder matches 8-char codes
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -586,6 +586,11 @@ const LG = {
   },
   mapPaymentFetches(codes, fetchPayment, nonInvoice) {
     return codes.map((code) => fetchPayment(code, nonInvoice));
+  },
+  SESSION_CODE_LENGTH: 8,
+  sessionCodePlaceholder(length) {
+    if (length == null) length = LG.SESSION_CODE_LENGTH;
+    return `Kode sesi (${length} karakter)`;
   },
   randomBase36(length) {
     const alphabet = '0123456789abcdefghijklmnopqrstuvwxyz';
@@ -3922,7 +3927,7 @@ async function createSession() {
 const nama = document.getElementById('lg-mp-name').value.trim() || 'Anonim';
 myName = nama;
 localStorage.setItem('lg_mp_name', nama);
-const code = LG.randomBase36(8).toUpperCase();
+const code = LG.randomBase36(LG.SESSION_CODE_LENGTH).toUpperCase();
 const now = new Date().toISOString();
 try {
 await fbPut(`/opname/${code}/meta`, {
@@ -4517,7 +4522,7 @@ box.innerHTML = `
 style="width:100%;padding:8px 10px;border-radius:6px;border:1px solid #cbd5e1;font-size:12px;margin-bottom:8px;" />
 <button id="lg-mp-create" style="width:100%;padding:8px;background:#2563eb;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;margin-bottom:8px;">➕ Buat Sesi Baru <span style="font-weight:400;opacity:.85;">(progress solo ikut)</span></button>
 <div style="display:flex;gap:6px;">
-<input id="lg-mp-code" type="text" placeholder="Kode sesi (6 karakter)"
+<input id="lg-mp-code" type="text" placeholder="${escAttr(LG.sessionCodePlaceholder())}"
 style="flex:1;padding:8px 10px;border-radius:6px;border:1px solid #cbd5e1;font-size:12px;text-transform:uppercase;" />
 <button id="lg-mp-join" style="padding:8px 14px;background:#16a34a;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:11px;font-weight:600;">Gabung</button>
 </div>
