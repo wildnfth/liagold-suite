@@ -18,6 +18,9 @@ import {
   formListOptimizeClassNames,
   FORM_LIST_OPTIMIZE_CLASS,
   shouldPauseBatch,
+  planFormUnavailable,
+  planFormCodeStep,
+  formQueueFinishKind,
 } from '../lib/form-send.js';
 
 describe('filterCodesForActiveTray', () => {
@@ -197,5 +200,95 @@ describe('shouldPauseBatch', () => {
   it('pauses when the last fill was slow or unknown', () => {
     assert.equal(shouldPauseBatch({ batchCount: 25, batchSize: 25, lastFillMs: 900, slowThresholdMs: 400 }), true);
     assert.equal(shouldPauseBatch({ batchCount: 25, batchSize: 25, lastFillMs: null, slowThresholdMs: 400 }), true);
+  });
+});
+
+describe('planFormUnavailable', () => {
+  it('runs and clears retries when the form input is present', () => {
+    assert.deepEqual(
+      planFormUnavailable({ hasInput: true, retryCount: 4, maxRetry: 10 }),
+      { action: 'run', retryCount: 0 },
+    );
+  });
+
+  it('retries while under the cap and gives up after', () => {
+    assert.deepEqual(
+      planFormUnavailable({ hasInput: false, retryCount: 2, maxRetry: 10 }),
+      { action: 'retry', retryCount: 3 },
+    );
+    assert.deepEqual(
+      planFormUnavailable({ hasInput: false, retryCount: 10, maxRetry: 10 }),
+      { action: 'give-up', retryCount: 11 },
+    );
+  });
+});
+
+describe('planFormCodeStep', () => {
+  it('skips codes already filled or already in the form text', () => {
+    assert.equal(planFormCodeStep({
+      code: 'AAA',
+      filledSet: new Set(['aaa']),
+      presentSet: new Set(),
+      hasInput: true,
+    }).action, 'skip');
+    assert.equal(planFormCodeStep({
+      code: 'BBB',
+      filledSet: new Set(),
+      presentSet: new Set(['bbb']),
+      hasInput: true,
+    }).action, 'skip');
+  });
+
+  it('stops the batch when the form input disappears mid-queue', () => {
+    assert.equal(planFormCodeStep({
+      code: 'AAA',
+      filledSet: new Set(),
+      presentSet: new Set(),
+      hasInput: false,
+    }).action, 'form-missing');
+  });
+
+  it('fills a new code when the form is still there', () => {
+    assert.equal(planFormCodeStep({
+      code: 'AAA',
+      filledSet: new Set(),
+      presentSet: new Set(),
+      hasInput: true,
+    }).action, 'fill');
+  });
+});
+
+describe('formQueueFinishKind', () => {
+  it('reports success only after a full drain with fills', () => {
+    assert.equal(formQueueFinishKind({
+      processed: 3,
+      exitedEarly: false,
+      stopping: false,
+      remaining: 0,
+    }), 'success');
+  });
+
+  it('reports paused when the form vanished after some fills', () => {
+    assert.equal(formQueueFinishKind({
+      processed: 2,
+      exitedEarly: true,
+      stopping: false,
+      remaining: 4,
+    }), 'paused');
+  });
+
+  it('stays quiet when stopped or nothing was filled', () => {
+    assert.equal(formQueueFinishKind({
+      processed: 2,
+      exitedEarly: false,
+      stopping: true,
+      remaining: 0,
+    }), null);
+    assert.equal(formQueueFinishKind({
+      processed: 0,
+      exitedEarly: false,
+      stopping: false,
+      remaining: 0,
+    }), null);
   });
 });

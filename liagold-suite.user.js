@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.59
-// @description  v1.0.59: unbiased rejection sampling in randomBase36
+// @version      2.0.0
+// @description  v2.0.0: split CC≥15 functions into lib
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -77,6 +77,246 @@ const LG = {
       delayMs: LG.ES_RECONNECT_DELAY_MS,
     };
   },
+  classifyEsPath(path) {
+    const exact = {
+      '/': 'root',
+      '/history': 'history',
+      '/meta': 'meta',
+      '/meta/lastScanAt': 'metaLastScanAt',
+      '/scans': 'scans',
+      '/peserta': 'peserta',
+      '/dupes': 'dupes',
+    }[path];
+    if (exact) return { kind: exact };
+    const prefixes = [
+      ['/history/', 'historyItem'],
+      ['/scans/', 'scanItem'],
+      ['/peserta/', 'pesertaItem'],
+      ['/dupes/', 'dupeItem'],
+    ];
+    for (const [prefix, kind] of prefixes) {
+      if (String(path).startsWith(prefix)) {
+        return { kind, key: String(path).slice(prefix.length) };
+      }
+    }
+    return { kind: 'unknown' };
+  },
+  mergeScanEntry(history, key, entry) {
+    if (!entry || !entry.codeProduct) return history;
+    if (history[key]) return history;
+    return { ...history, [key]: entry };
+  },
+  mergeScansIntoHistory(history, scans) {
+    if (!scans || typeof scans !== 'object') return history;
+    let next = history;
+    for (const [key, entry] of Object.entries(scans)) {
+      next = LG.mergeScanEntry(next, key, entry);
+    }
+    return next;
+  },
+  putRoot(state, data) {
+    if (data === null) return { state, effects: ['verifySessionAlive'] };
+    const effects = [];
+    let lastScanAt = state.lastScanAt;
+    if (data.meta?.lastScanAt) {
+      lastScanAt = data.meta.lastScanAt;
+      effects.push('updateCountdownDisplay');
+    }
+    effects.push('onCloudUpdate', 'renderParticipants');
+    let cloudHistory = data.history || {};
+    cloudHistory = LG.mergeScansIntoHistory(cloudHistory, data.scans);
+    return {
+      state: {
+        ...state,
+        cloudHistory,
+        participants: data.peserta || {},
+        dupeCount: data.dupes ? Object.keys(data.dupes).length : 0,
+        lastScanAt,
+      },
+      effects,
+    };
+  },
+  putHistory(state, data) {
+    return {
+      state: { ...state, cloudHistory: data === null ? {} : data },
+      effects: ['onCloudUpdate'],
+    };
+  },
+  putHistoryItem(state, data, { key }) {
+    const cloudHistory = { ...state.cloudHistory };
+    if (data === null) delete cloudHistory[key];
+    else cloudHistory[key] = data;
+    return { state: { ...state, cloudHistory }, effects: ['onCloudUpdate'] };
+  },
+  putMeta(state, data) {
+    if (!data?.lastScanAt) return { state, effects: [] };
+    return {
+      state: { ...state, lastScanAt: data.lastScanAt },
+      effects: ['updateCountdownDisplay'],
+    };
+  },
+  putMetaLastScanAt(state, data) {
+    return {
+      state: { ...state, lastScanAt: data },
+      effects: ['updateCountdownDisplay'],
+    };
+  },
+  putScans(state, data) {
+    return {
+      state: { ...state, cloudHistory: LG.mergeScansIntoHistory(state.cloudHistory, data) },
+      effects: ['onCloudUpdate'],
+    };
+  },
+  putScanItem(state, data, { key }) {
+    return {
+      state: { ...state, cloudHistory: LG.mergeScanEntry(state.cloudHistory, key, data) },
+      effects: ['onCloudUpdate'],
+    };
+  },
+  putPeserta(state, data) {
+    return {
+      state: { ...state, participants: data || {} },
+      effects: ['renderParticipants'],
+    };
+  },
+  putPesertaItem(state, data, { key }) {
+    const participants = { ...state.participants };
+    if (data === null) delete participants[key];
+    else participants[key] = data;
+    return { state: { ...state, participants }, effects: ['renderParticipants'] };
+  },
+  putDupes(state, data) {
+    return {
+      state: { ...state, dupeCount: data ? Object.keys(data).length : 0 },
+      effects: ['updateStats'],
+    };
+  },
+  putDupeItem(state, data) {
+    const dupeCount = data === null
+      ? Math.max(0, state.dupeCount - 1)
+      : state.dupeCount + 1;
+    return { state: { ...state, dupeCount }, effects: ['updateStats'] };
+  },
+  applyEsPut(state, path, data) {
+    const classified = LG.classifyEsPath(path);
+    const handler = {
+      root: LG.putRoot,
+      history: LG.putHistory,
+      historyItem: LG.putHistoryItem,
+      meta: LG.putMeta,
+      metaLastScanAt: LG.putMetaLastScanAt,
+      scans: LG.putScans,
+      scanItem: LG.putScanItem,
+      peserta: LG.putPeserta,
+      pesertaItem: LG.putPesertaItem,
+      dupes: LG.putDupes,
+      dupeItem: LG.putDupeItem,
+    }[classified.kind];
+    if (!handler) return { state, effects: [] };
+    return handler(state, data, classified);
+  },
+  patchRoot(state, data) {
+    const next = { ...state };
+    const effects = [];
+    const applyField = {
+      history(value) { next.cloudHistory = value || {}; },
+      peserta(value) { next.participants = value || {}; },
+      dupes(value) { next.dupeCount = value ? Object.keys(value).length : 0; },
+      meta(value) {
+        if (!value?.lastScanAt) return;
+        next.lastScanAt = value.lastScanAt;
+        effects.push('updateCountdownDisplay');
+      },
+      scans(value) {
+        if (!value || typeof value !== 'object') return;
+        next.cloudHistory = LG.mergeScansIntoHistory(next.cloudHistory, value);
+      },
+    };
+    for (const [key, value] of Object.entries(data || {})) {
+      const apply = applyField[key];
+      if (apply) apply(value);
+    }
+    effects.push('onCloudUpdate', 'renderParticipants');
+    return { state: next, effects };
+  },
+  patchHistory(state, data) {
+    const cloudHistory = { ...state.cloudHistory };
+    for (const [key, value] of Object.entries(data || {})) {
+      if (value === null) delete cloudHistory[key];
+      else cloudHistory[key] = value;
+    }
+    return { state: { ...state, cloudHistory }, effects: ['onCloudUpdate'] };
+  },
+  patchHistoryItem(state, data, { key }) {
+    const cloudHistory = { ...state.cloudHistory };
+    const item = { ...(cloudHistory[key] || {}) };
+    for (const [subKey, value] of Object.entries(data || {})) {
+      if (value === null) delete item[subKey];
+      else item[subKey] = value;
+    }
+    cloudHistory[key] = item;
+    return { state: { ...state, cloudHistory }, effects: ['onCloudUpdate'] };
+  },
+  patchScanItem(state) {
+    return { state, effects: ['onCloudUpdate'] };
+  },
+  patchPeserta(state, data) {
+    const participants = { ...state.participants };
+    for (const [key, value] of Object.entries(data || {})) {
+      if (value === null) delete participants[key];
+      else participants[key] = value;
+    }
+    return { state: { ...state, participants }, effects: ['renderParticipants'] };
+  },
+  patchDupes(state, data) {
+    if (!data || typeof data !== 'object') {
+      return { state, effects: ['updateStats'] };
+    }
+    return {
+      state: { ...state, dupeCount: Object.keys(data).length },
+      effects: ['updateStats'],
+    };
+  },
+  applyEsPatch(state, path, data) {
+    const classified = LG.classifyEsPath(path);
+    const handler = {
+      root: LG.patchRoot,
+      history: LG.patchHistory,
+      historyItem: LG.patchHistoryItem,
+      meta: LG.putMeta,
+      metaLastScanAt: LG.putMetaLastScanAt,
+      scans: LG.putScans,
+      scanItem: LG.patchScanItem,
+      peserta: LG.patchPeserta,
+      pesertaItem: LG.putPesertaItem,
+      dupes: LG.patchDupes,
+      dupeItem: LG.patchDupes,
+    }[classified.kind];
+    if (!handler) return { state, effects: [] };
+    return handler(state, data, classified);
+  },
+  applyBothSeparators(raw, lastComma, lastDot) {
+    if (lastComma > lastDot) return raw.replace(/\./g, '').replace(',', '.');
+    return raw.replace(/,/g, '');
+  },
+  applyDotsOnly(raw, lastDot, dotCount) {
+    if (dotCount > 1) return raw.replace(/\./g, '');
+    const frac = raw.length - lastDot - 1;
+    return frac === 3 ? raw.replace('.', '') : raw;
+  },
+  applyCommasOnly(raw, commaCount) {
+    return commaCount > 1 ? raw.replace(/,/g, '') : raw.replace(',', '.');
+  },
+  normalizeIdNumberRaw(raw) {
+    const lastComma = raw.lastIndexOf(',');
+    const lastDot = raw.lastIndexOf('.');
+    const commaCount = (raw.match(/,/g) || []).length;
+    const dotCount = (raw.match(/\./g) || []).length;
+    if (lastComma !== -1 && lastDot !== -1) return LG.applyBothSeparators(raw, lastComma, lastDot);
+    if (dotCount > 0 && commaCount === 0) return LG.applyDotsOnly(raw, lastDot, dotCount);
+    if (commaCount > 0 && dotCount === 0) return LG.applyCommasOnly(raw, commaCount);
+    return raw;
+  },
   parseIdNumber(value) {
     if (typeof value === 'number') {
       return Number.isFinite(value) ? value : 0;
@@ -85,33 +325,9 @@ const LG = {
     const original = String(value).trim();
     if (!original) return 0;
     const negative = /[-−]/.test(original);
-    let raw = original.replace(/[^\d.,]/g, '');
+    const raw = original.replace(/[^\d.,]/g, '');
     if (!raw) return 0;
-    const lastComma = raw.lastIndexOf(',');
-    const lastDot = raw.lastIndexOf('.');
-    const commaCount = (raw.match(/,/g) || []).length;
-    const dotCount = (raw.match(/\./g) || []).length;
-    if (lastComma !== -1 && lastDot !== -1) {
-      if (lastComma > lastDot) {
-        raw = raw.replace(/\./g, '').replace(',', '.');
-      } else {
-        raw = raw.replace(/,/g, '');
-      }
-    } else if (dotCount > 0 && commaCount === 0) {
-      if (dotCount > 1) {
-        raw = raw.replace(/\./g, '');
-      } else {
-        const frac = raw.length - lastDot - 1;
-        if (frac === 3) raw = raw.replace('.', '');
-      }
-    } else if (commaCount > 0 && dotCount === 0) {
-      if (commaCount > 1) {
-        raw = raw.replace(/,/g, '');
-      } else {
-        raw = raw.replace(',', '.');
-      }
-    }
-    const num = parseFloat(raw);
+    const num = parseFloat(LG.normalizeIdNumberRaw(raw));
     if (!Number.isFinite(num)) return 0;
     return negative ? -Math.abs(num) : num;
   },
@@ -222,6 +438,48 @@ const LG = {
     if (!productCount) return 'empty';
     return null;
   },
+  pickSoldItem(json) {
+    if (json == null) return null;
+    if (Array.isArray(json) && json.length) return json[0];
+    if (json.items?.length) return json.items[0];
+    if (json.data?.length) return json.data[0];
+    if (json.Name || json.FullName || json.Id) return json;
+    return null;
+  },
+  codeFromSoldItem(item, fallbackCode) {
+    if (item.CodeProduct) return item.CodeProduct;
+    if (item.FullName) return item.FullName.split(' - ')[0].trim();
+    return fallbackCode;
+  },
+  normalizeSoldProduct(item, fallbackCode, pickPrice) {
+    if (!item) return null;
+    return {
+      codeProduct: LG.codeFromSoldItem(item, fallbackCode),
+      code: item.Code || '-',
+      name: item.Name || '',
+      fullName: item.FullName || '',
+      weight: item.WeightReal || item.WeightSystem || 0,
+      price: pickPrice(item),
+      image: item.ProductPicture || '',
+      kadar: item.Kadar || '',
+      trayCode: item.TrayCode || '-',
+      stockQty: item.StockQuantity ?? 0,
+    };
+  },
+  classifyFoundScan({ found, scanned, pending, selectedTray } = {}) {
+    if (!found) return { kind: 'lookup-sold' };
+    const cpL = String(found.codeProduct).toLowerCase();
+    if ((scanned && scanned.has(cpL)) || (pending && pending.has(cpL))) {
+      return { kind: 'sudah', found, cpL };
+    }
+    if (String(found.trayId) !== selectedTray) return { kind: 'salah-baki', found, cpL };
+    return { kind: 'masuk', found, cpL };
+  },
+  classifySoldScan(soldItem) {
+    if (!soldItem) return { kind: 'tidak-ada' };
+    if (soldItem.stockQty > 0) return { kind: 'salah-baki-sold', soldItem };
+    return { kind: 'terjual', soldItem };
+  },
   pickProductPrice(item) {
     if (!item || typeof item !== 'object') return 0;
     for (const key of ['SellingPrice', 'Price', 'SellingPriceValue']) {
@@ -318,6 +576,25 @@ const LG = {
     if (shortMs == null) shortMs = 1500;
     return hadSuccess ? shortMs : longMs;
   },
+  planFormUnavailable({ hasInput, retryCount, maxRetry } = {}) {
+    if (hasInput) return { action: 'run', retryCount: 0 };
+    const nextRetry = Number(retryCount) + 1;
+    if (nextRetry > Number(maxRetry)) return { action: 'give-up', retryCount: nextRetry };
+    return { action: 'retry', retryCount: nextRetry };
+  },
+  planFormCodeStep({ code, filledSet, presentSet, hasInput } = {}) {
+    const lc = String(code || '').toLowerCase();
+    if ((filledSet && filledSet.has(lc)) || (presentSet && presentSet.has(lc))) {
+      return { action: 'skip', lc };
+    }
+    if (!hasInput) return { action: 'form-missing', lc };
+    return { action: 'fill', lc };
+  },
+  formQueueFinishKind({ processed, exitedEarly, stopping, remaining } = {}) {
+    if (processed > 0 && !stopping && !exitedEarly && remaining === 0) return 'success';
+    if (exitedEarly && processed > 0) return 'paused';
+    return null;
+  },
   FORM_LIST_OPTIMIZE_CLASS: 'lg-form-fill-opt',
   formListOptimizeClassNames(current, on, cls) {
     if (cls == null) cls = LG.FORM_LIST_OPTIMIZE_CLASS;
@@ -358,6 +635,22 @@ const LG = {
       return false;
     });
   },
+  NON_TEXT_INPUT: new Set([
+    'checkbox',
+    'radio',
+    'button',
+    'submit',
+    'reset',
+    'image',
+    'file',
+    'hidden',
+  ]),
+  isPanelTextField(tagName, inputType) {
+    const tag = String(tagName || '').toLowerCase();
+    const type = String(inputType || 'text').toLowerCase();
+    if (tag === 'textarea' || tag === 'select') return true;
+    return tag === 'input' && !LG.NON_TEXT_INPUT.has(type);
+  },
   shouldBounceScanFocus({
     panelVisible,
     targetId,
@@ -367,12 +660,7 @@ const LG = {
   } = {}) {
     if (!panelVisible) return false;
     if (targetId === 'lg-scan-input') return false;
-    const tag = String(tagName || '').toLowerCase();
-    const type = String(inputType || 'text').toLowerCase();
-    const isPanelTextField = tag === 'textarea' || tag === 'select'
-      || (tag === 'input' && type !== 'checkbox' && type !== 'radio' && type !== 'button'
-        && type !== 'submit' && type !== 'reset' && type !== 'image' && type !== 'file' && type !== 'hidden');
-    if (insidePanel && isPanelTextField) return false;
+    if (insidePanel && LG.isPanelTextField(tagName, inputType)) return false;
     return true;
   },
   parseSesuaiFormCode(raw) {
@@ -2228,16 +2516,9 @@ tfoot.appendChild(tr);
 }
 return tr;
 }
-function renderTable(table) {
-const tr = ensureFooterRow(table);
-const rows = Array.from(table.querySelectorAll('tbody tr.mat-row'));
-const headerCells = Array.from(table.querySelectorAll('thead tr.mat-header-row th.mat-header-cell'));
-const totalColumns = headerCells.length;
-if (totalColumns === 0) return;
+function sumFooterColumns(rows) {
 const sums = {};
-COLUMNS.forEach((col) => {
-sums[col.key] = 0;
-});
+COLUMNS.forEach((col) => { sums[col.key] = 0; });
 rows.forEach((row) => {
 COLUMNS.forEach((col) => {
 const cell = row.querySelector(`td.mat-column-${col.key}, td.cdk-column-${col.key}`);
@@ -2245,33 +2526,27 @@ sums[col.key] += parseCell(cell);
 });
 });
 COLUMNS.forEach((col) => {
-if (col.type === 'weight') {
-sums[col.key] = Math.round(sums[col.key] * 100) / 100;
-} else {
-sums[col.key] = Math.round(sums[col.key]);
+sums[col.key] = col.type === 'weight'
+? Math.round(sums[col.key] * 100) / 100
+: Math.round(sums[col.key]);
+});
+return sums;
 }
-});
-const signature = JSON.stringify({
-c: rows.length,
-n: totalColumns,
-s: sums
-});
-if (tr.dataset.signature === signature) return;
+function findColumnPositions(headerCells) {
 const positions = {};
 COLUMNS.forEach((col) => {
-let idx = headerCells.findIndex((th) => {
-return (
+let idx = headerCells.findIndex((th) =>
 th.classList.contains(`mat-column-${col.key}`) ||
 th.classList.contains(`cdk-column-${col.key}`)
 );
-});
 if (idx === -1) {
 idx = headerCells.findIndex((th) => normalize(th.textContent) === normalize(col.label));
 }
-if (idx !== -1) {
-positions[col.key] = idx;
-}
+if (idx !== -1) positions[col.key] = idx;
 });
+return positions;
+}
+function findStickyLabelIndex(headerCells) {
 let labelIdx = headerCells.findIndex(th =>
 th.classList.contains('mat-table-sticky') &&
 (th.style.left === '0px' || th.style.left === '0')
@@ -2279,38 +2554,55 @@ th.classList.contains('mat-table-sticky') &&
 if (labelIdx === -1) {
 labelIdx = headerCells.findIndex(th => th.classList.contains('mat-table-sticky'));
 }
-if (labelIdx === -1) labelIdx = 0;
-tr.innerHTML = '';
-for (let i = 0; i < totalColumns; i++) {
-const td = document.createElement('td');
-td.className = 'mat-cell mat-footer-cell gold-total-value';
-td.setAttribute('role', 'gridcell');
-const col = COLUMNS.find(c => positions[c.key] === i);
-const th = headerCells[i];
+return labelIdx === -1 ? 0 : labelIdx;
+}
+function paintFooterCell(td, { i, labelIdx, col, sums, rowCount, th }) {
 const isSticky = th && th.classList.contains('mat-table-sticky');
 if (i === labelIdx) {
-td.textContent = `TOTAL (${rows.length} baris)`;
+td.textContent = `TOTAL (${rowCount} baris)`;
 td.classList.remove('gold-total-value');
 td.classList.add('gold-total-label');
 td.style.textAlign = 'left';
 td.style.paddingLeft = '16px';
 } else if (col) {
 const value = sums[col.key];
-const text = col.type === 'weight' ? fmtWeight(value) : fmtMoney(value);
-td.textContent = text;
+td.textContent = col.type === 'weight' ? fmtWeight(value) : fmtMoney(value);
 td.classList.add(`gold-total-${col.key}`);
 td.classList.add(`mat-column-${col.key}`);
 if (value < 0) td.classList.add('gold-total-negative');
 } else {
 td.textContent = '';
 }
-if (isSticky) {
+if (!isSticky) return;
 td.classList.add('mat-table-sticky');
 td.style.position = 'sticky';
 td.style.left = th.style.left;
 td.style.zIndex = (i === labelIdx) ? '70' : '62';
 td.style.backgroundColor = (i === labelIdx) ? '#fff3c9' : '#fffbe8';
 }
+function renderTable(table) {
+const tr = ensureFooterRow(table);
+const rows = Array.from(table.querySelectorAll('tbody tr.mat-row'));
+const headerCells = Array.from(table.querySelectorAll('thead tr.mat-header-row th.mat-header-cell'));
+if (!headerCells.length) return;
+const sums = sumFooterColumns(rows);
+const signature = JSON.stringify({ c: rows.length, n: headerCells.length, s: sums });
+if (tr.dataset.signature === signature) return;
+const positions = findColumnPositions(headerCells);
+const labelIdx = findStickyLabelIndex(headerCells);
+tr.innerHTML = '';
+for (let i = 0; i < headerCells.length; i++) {
+const td = document.createElement('td');
+td.className = 'mat-cell mat-footer-cell gold-total-value';
+td.setAttribute('role', 'gridcell');
+paintFooterCell(td, {
+i,
+labelIdx,
+col: COLUMNS.find(c => positions[c.key] === i),
+sums,
+rowCount: rows.length,
+th: headerCells[i],
+});
 tr.appendChild(td);
 }
 tr.dataset.signature = signature;
@@ -2489,6 +2781,29 @@ setInterval(safeUpdate, 2500);
   }
 
   let rendering = false;
+  function salesBarLabel(agg, loaded, known, pending) {
+    if (pending) return `TOTAL (${loaded}/${known} baris)`;
+    return `TOTAL (${known || agg.count} baris)`;
+  }
+  function salesBarHtml(agg, label) {
+    const cells = agg.methods.map((row) => {
+      const neg = row.amount < 0 ? ' neg' : '';
+      return `<div class="gold-sales-pay-cell"><span class="gold-sales-pay-method">${escapeHtml(row.label)}</span><span class="gold-sales-pay-amount${neg}">${fmtMoney(row.amount)}</span></div>`;
+    });
+    if (agg.methods.length) {
+      const neg = agg.total < 0 ? ' neg' : '';
+      cells.push(`<div class="gold-sales-pay-cell gold-sales-pay-sum"><span class="gold-sales-pay-method">Jumlah</span><span class="gold-sales-pay-amount${neg}">${fmtMoney(agg.total)}</span></div>`);
+    }
+    return `<div class="gold-sales-pay-label">${escapeHtml(label)}</div><div class="gold-sales-pay-methods">${cells.join('')}</div>`;
+  }
+  function placeSalesBar(host, bar) {
+    const bottom = host.querySelector('.mat-table__bottom');
+    if (bottom && bottom.parentNode === host) {
+      if (bar.nextElementSibling !== bottom) host.insertBefore(bar, bottom);
+      return;
+    }
+    if (bar.parentNode !== host) host.appendChild(bar);
+  }
   function render() {
     if (rendering) return;
     rendering = true;
@@ -2511,9 +2826,7 @@ setInterval(safeUpdate, 2500);
       const loaded = items.length;
       const known = totalCount || loaded;
       const pending = fetching.size > 0 && loaded < known;
-      const label = pending
-        ? `TOTAL (${loaded}/${known} baris)`
-        : `TOTAL (${known || agg.count} baris)`;
+      const label = salesBarLabel(agg, loaded, known, pending);
       const signature = JSON.stringify({
         label,
         methods: agg.methods,
@@ -2527,24 +2840,11 @@ setInterval(safeUpdate, 2500);
       }
 
       if (bar.dataset.signature !== signature) {
-        const cells = agg.methods.map((row) => {
-          const neg = row.amount < 0 ? ' neg' : '';
-          return `<div class="gold-sales-pay-cell"><span class="gold-sales-pay-method">${escapeHtml(row.label)}</span><span class="gold-sales-pay-amount${neg}">${fmtMoney(row.amount)}</span></div>`;
-        });
-        if (agg.methods.length) {
-          const neg = agg.total < 0 ? ' neg' : '';
-          cells.push(`<div class="gold-sales-pay-cell gold-sales-pay-sum"><span class="gold-sales-pay-method">Jumlah</span><span class="gold-sales-pay-amount${neg}">${fmtMoney(agg.total)}</span></div>`);
-        }
-        bar.innerHTML = `<div class="gold-sales-pay-label">${escapeHtml(label)}</div><div class="gold-sales-pay-methods">${cells.join('')}</div>`;
+        bar.innerHTML = salesBarHtml(agg, label);
         bar.dataset.signature = signature;
       }
 
-      const bottom = host.querySelector('.mat-table__bottom');
-      if (bottom && bottom.parentNode === host) {
-        if (bar.nextElementSibling !== bottom) host.insertBefore(bar, bottom);
-      } else if (bar.parentNode !== host) {
-        host.appendChild(bar);
-      }
+      placeSalesBar(host, bar);
     } finally {
       rendering = false;
     }
@@ -3710,80 +4010,46 @@ function queueFormInput(code) {
 if (!LG.enqueueFormCode(formQueue, formQueuedCodes, formFilledCodes, code)) return;
 processFormQueue();
 }
-async function processFormQueue() {
-if (isProcessingForm) return;
-if (!formQueue.length) return;
-if (!getFormInput()) {
-formRetryCount++;
-if (formRetryCount > MAX_FORM_RETRY) {
-updateStatus(`⚠️ Form tidak tersedia setelah ${MAX_FORM_RETRY}x retry. Queue dihapus (${formQueue.length} kode).`);
-clearFormQueue();
-formRetryCount = 0;
-return;
-}
-updateStatus(`⚠️ Form belum tersedia. Retry ${formRetryCount}/${MAX_FORM_RETRY}…`);
-if (!formRetryTimer) {
+function scheduleFormRetry() {
+if (formRetryTimer) return;
 formRetryTimer = setTimeout(() => {
 formRetryTimer = null;
 processFormQueue();
 }, 3000);
 }
+function handleFormUnavailable(plan, midQueue) {
+formRetryCount = plan.action === 'give-up' ? 0 : plan.retryCount;
+if (plan.action === 'give-up') {
+const msg = midQueue
+? `⚠️ Form hilang. Sisa ${formQueue.length} kode dihapus.`
+: `⚠️ Form tidak tersedia setelah ${MAX_FORM_RETRY}x retry. Queue dihapus (${formQueue.length} kode).`;
+updateStatus(msg);
+clearFormQueue();
 return;
 }
-isProcessingForm = true;
-isStoppingForm = false;
-syncStopFormButton();
-formRetryCount = 0;
-let processed = 0;
-let batchCount = 0;
-let lastFillMs = null;
-let exitedEarly = false;
-const totalItems = formQueue.length;
-try {
-const presentSet = LG.collectPresentCodes(formQueue, getFormListText());
-hideFormList();
-while (formQueue.length) {
-if (isStoppingForm) {
-updateStatus(`⏹ Dihentikan. ${formQueue.length} kode tersisa. Kirim lagi untuk melanjutkan.`);
-clearFormQueue();
-break;
+if (!midQueue) {
+updateStatus(`⚠️ Form belum tersedia. Retry ${plan.retryCount}/${MAX_FORM_RETRY}…`);
 }
-if (LG.shouldPauseBatch({ batchCount, batchSize, lastFillMs, slowThresholdMs: 400 }) && formQueue.length > 0) {
-updateStatus(`⏸️ Jeda batch: ${processed}/${totalItems} diproses. Menunggu ${batchDelay}ms...`);
+scheduleFormRetry();
+}
+function clearFormQueueIfStopping(message) {
+if (!isStoppingForm) return false;
+updateStatus(message);
+clearFormQueue();
+return true;
+}
+async function pauseFormBatch(ctx) {
+if (!(LG.shouldPauseBatch({
+batchCount: ctx.batchCount,
+batchSize,
+lastFillMs: ctx.lastFillMs,
+slowThresholdMs: 400,
+}) && formQueue.length > 0)) return;
+updateStatus(`⏸️ Jeda batch: ${ctx.processed}/${ctx.totalItems} diproses. Menunggu ${batchDelay}ms...`);
 await sleep(batchDelay);
-batchCount = 0;
-if (isStoppingForm) {
-updateStatus(`⏹ Dihentikan setelah jeda batch. Kirim lagi untuk melanjutkan.`);
-clearFormQueue();
-break;
+ctx.batchCount = 0;
 }
-}
-const code = LG.dequeueFormCode(formQueue, formQueuedCodes);
-if (code == null) break;
-const lc = String(code).toLowerCase();
-if (formFilledCodes.has(lc) || presentSet.has(lc)) {
-formFilledCodes.add(lc);
-continue;
-}
-if (!getFormInput()) {
-formQueue.unshift(code);
-formQueuedCodes.add(lc);
-formRetryCount++;
-if (formRetryCount > MAX_FORM_RETRY) {
-updateStatus(`⚠️ Form hilang. Sisa ${formQueue.length} kode dihapus.`);
-clearFormQueue();
-formRetryCount = 0;
-break;
-}
-if (!formRetryTimer) {
-formRetryTimer = setTimeout(() => {
-formRetryTimer = null;
-processFormQueue();
-}, 3000);
-}
-exitedEarly = true;
-return;
-}
+async function fillFormCode(code, lc, ctx) {
 const beforeCount = getFormProductCount();
 const beforeSig = getFormCounters();
 const filled = fillCodeProductToForm(code);
@@ -3792,16 +4058,16 @@ const t0 = Date.now();
 if (filled) {
 clickSearchBtn();
 focusScanInput();
-changed = await waitForFormFill(beforeCount, beforeSig, LG.nextFormWaitTimeout(processed > 0));
+changed = await waitForFormFill(beforeCount, beforeSig, LG.nextFormWaitTimeout(ctx.processed > 0));
 focusScanInput();
 }
-lastFillMs = Date.now() - t0;
-if (changed) presentSet.add(lc);
+ctx.lastFillMs = Date.now() - t0;
+if (changed) ctx.presentSet.add(lc);
 const decision = LG.recordFormAttempt(formAttemptCounts, lc, changed);
 if (decision.markFilled) {
 formFilledCodes.add(lc);
-processed++;
-batchCount++;
+ctx.processed++;
+ctx.batchCount++;
 } else if (decision.retry) {
 LG.enqueueFormCode(formQueue, formQueuedCodes, formFilledCodes, code);
 updateStatus(`⚠️ Gagal input ${code}. Retry ${formAttemptCounts.get(lc)}/${LG.MAX_FORM_CODE_ATTEMPTS}…`);
@@ -3810,6 +4076,68 @@ updateStatus(`⚠️ Gagal input ${code} setelah ${LG.MAX_FORM_CODE_ATTEMPTS}x. 
 }
 await new Promise((r) => requestAnimationFrame(() => r()));
 }
+async function drainFormQueue(ctx) {
+while (formQueue.length) {
+if (clearFormQueueIfStopping(`⏹ Dihentikan. ${formQueue.length} kode tersisa. Kirim lagi untuk melanjutkan.`)) break;
+await pauseFormBatch(ctx);
+if (clearFormQueueIfStopping(`⏹ Dihentikan setelah jeda batch. Kirim lagi untuk melanjutkan.`)) break;
+const code = LG.dequeueFormCode(formQueue, formQueuedCodes);
+if (code == null) break;
+const step = LG.planFormCodeStep({
+code,
+filledSet: formFilledCodes,
+presentSet: ctx.presentSet,
+hasInput: !!getFormInput(),
+});
+if (step.action === 'skip') {
+formFilledCodes.add(step.lc);
+continue;
+}
+if (step.action === 'form-missing') {
+formQueue.unshift(code);
+formQueuedCodes.add(step.lc);
+const plan = LG.planFormUnavailable({
+hasInput: false,
+retryCount: formRetryCount,
+maxRetry: MAX_FORM_RETRY,
+});
+handleFormUnavailable(plan, true);
+ctx.exitedEarly = true;
+if (plan.action !== 'give-up') ctx.returnEarly = true;
+break;
+}
+await fillFormCode(code, step.lc, ctx);
+}
+}
+async function processFormQueue() {
+if (isProcessingForm) return;
+if (!formQueue.length) return;
+const start = LG.planFormUnavailable({
+hasInput: !!getFormInput(),
+retryCount: formRetryCount,
+maxRetry: MAX_FORM_RETRY,
+});
+if (start.action !== 'run') {
+handleFormUnavailable(start, false);
+return;
+}
+isProcessingForm = true;
+isStoppingForm = false;
+syncStopFormButton();
+formRetryCount = 0;
+const ctx = {
+processed: 0,
+batchCount: 0,
+lastFillMs: null,
+exitedEarly: false,
+returnEarly: false,
+totalItems: formQueue.length,
+presentSet: null,
+};
+try {
+ctx.presentSet = LG.collectPresentCodes(formQueue, getFormListText());
+hideFormList();
+await drainFormQueue(ctx);
 } finally {
 restoreFormList();
 isProcessingForm = false;
@@ -3820,11 +4148,15 @@ try { renderLog(); } catch (e) {}
 try { applyFilters(); } catch (e) {}
 focusScanInput();
 }
-if (processed > 0 && !isStoppingForm && !exitedEarly && formQueue.length === 0) {
-updateStatus(`✅ ${processed} kode berhasil diinput ke form.`);
-} else if (exitedEarly && processed > 0) {
-updateStatus(`⏸️ ${processed} kode terinput. Form hilang, sisa di-retry.`);
-}
+if (ctx.returnEarly) return;
+const kind = LG.formQueueFinishKind({
+processed: ctx.processed,
+exitedEarly: ctx.exitedEarly,
+stopping: isStoppingForm,
+remaining: formQueue.length,
+});
+if (kind === 'success') updateStatus(`✅ ${ctx.processed} kode berhasil diinput ke form.`);
+else if (kind === 'paused') updateStatus(`⏸️ ${ctx.processed} kode terinput. Form hilang, sisa di-retry.`);
 }
 async function fbPut(path, data) {
 const res = await fetch(`${FIREBASE}${path}.json`, {
@@ -4141,6 +4473,27 @@ cleanupSessionLocal();
 updateStatus('🗑️ Sesi dihapus oleh peserta lain — kamu otomatis keluar.');
 alert(`🗑️ Sesi telah DIHAPUS oleh peserta lain.\nKamu otomatis kembali ke MODE SOLO.\nData scan di device ini tetap tersimpan lokal.`);
 }
+function getEsState() {
+return { cloudHistory, participants, dupeCount, lastScanAt };
+}
+function applyEsResult(result) {
+if (!result || !result.state) return;
+cloudHistory = result.state.cloudHistory;
+participants = result.state.participants;
+dupeCount = result.state.dupeCount;
+lastScanAt = result.state.lastScanAt;
+const effects = {
+verifySessionAlive,
+updateCountdownDisplay,
+onCloudUpdate,
+renderParticipants,
+updateStats,
+};
+for (const name of result.effects || []) {
+const fn = effects[name];
+if (fn) fn();
+}
+}
 function listenSession() {
 if (esReconnectTimer) {
 clearTimeout(esReconnectTimer);
@@ -4156,101 +4509,7 @@ try {
 } catch (err) {
 return;
 }
-if (path === '/') {
-if (data === null) {
-verifySessionAlive();
-return;
-}
-cloudHistory = data.history || {};
-if (data.scans) {
-Object.entries(data.scans).forEach(([k, v]) => {
-if (!v || !v.codeProduct) return;
-if (!cloudHistory[k]) {
-cloudHistory[k] = v;
-}
-});
-}
-participants = data.peserta || {};
-dupeCount = data.dupes ? Object.keys(data.dupes).length : 0;
-if (data.meta?.lastScanAt) {
-lastScanAt = data.meta.lastScanAt;
-updateCountdownDisplay();
-}
-onCloudUpdate();
-renderParticipants();
-return;
-}
-if (path === '/history') {
-if (data === null) {
-cloudHistory = {};
-onCloudUpdate();
-return;
-}
-cloudHistory = data;
-onCloudUpdate();
-return;
-}
-if (path.startsWith('/history/')) {
-const k = path.slice('/history/'.length);
-if (data === null) delete cloudHistory[k];
-else cloudHistory[k] = data;
-onCloudUpdate();
-return;
-}
-if (path === '/meta') {
-if (data?.lastScanAt) {
-lastScanAt = data.lastScanAt;
-updateCountdownDisplay();
-}
-return;
-}
-if (path === '/meta/lastScanAt') {
-lastScanAt = data;
-updateCountdownDisplay();
-return;
-}
-if (path === '/scans' || path.startsWith('/scans/')) {
-const scansData = path === '/scans' ? data : null;
-if (scansData && typeof scansData === 'object') {
-Object.entries(scansData).forEach(([k, v]) => {
-if (!v || !v.codeProduct) return;
-if (!cloudHistory[k]) {
-cloudHistory[k] = v;
-}
-});
-} else if (path.startsWith('/scans/')) {
-const k = path.slice('/scans/'.length);
-if (data && data.codeProduct) {
-if (!cloudHistory[k]) {
-cloudHistory[k] = data;
-}
-}
-}
-onCloudUpdate();
-return;
-}
-if (path === '/peserta') {
-participants = data || {};
-renderParticipants();
-return;
-}
-if (path.startsWith('/peserta/')) {
-const k = path.slice('/peserta/'.length);
-if (data === null) delete participants[k];
-else participants[k] = data;
-renderParticipants();
-return;
-}
-if (path === '/dupes') {
-dupeCount = data ? Object.keys(data).length : 0;
-updateStats();
-return;
-}
-if (path.startsWith('/dupes/')) {
-dupeCount = data === null ? Math.max(0, dupeCount - 1) : dupeCount + 1;
-updateStats();
-return;
-}
+applyEsResult(LG.applyEsPut(getEsState(), path, data));
 });
 es.addEventListener('patch', e => {
 let path, data;
@@ -4259,103 +4518,7 @@ try {
 } catch (err) {
 return;
 }
-if (path === '/') {
-Object.entries(data || {}).forEach(([k, v]) => {
-if (k === 'history') cloudHistory = v || {};
-if (k === 'peserta') participants = v || {};
-if (k === 'dupes') dupeCount = v ? Object.keys(v).length : 0;
-if (k === 'meta' && v?.lastScanAt) {
-lastScanAt = v.lastScanAt;
-updateCountdownDisplay();
-}
-if (k === 'scans' && v && typeof v === 'object') {
-Object.entries(v).forEach(([sk, sv]) => {
-if (!sv || !sv.codeProduct) return;
-if (!cloudHistory[sk]) {
-cloudHistory[sk] = sv;
-}
-});
-}
-});
-onCloudUpdate();
-renderParticipants();
-return;
-}
-if (path === '/history') {
-Object.entries(data || {}).forEach(([k, v]) => {
-if (v === null) delete cloudHistory[k];
-else cloudHistory[k] = v;
-});
-onCloudUpdate();
-return;
-}
-if (path.startsWith('/history/')) {
-const k = path.slice('/history/'.length);
-if (!cloudHistory[k]) cloudHistory[k] = {};
-Object.entries(data || {}).forEach(([subK, v]) => {
-if (v === null) delete cloudHistory[k][subK];
-else cloudHistory[k][subK] = v;
-});
-onCloudUpdate();
-return;
-}
-if (path === '/meta') {
-if (data?.lastScanAt) {
-lastScanAt = data.lastScanAt;
-updateCountdownDisplay();
-}
-return;
-}
-if (path === '/meta/lastScanAt') {
-lastScanAt = data;
-updateCountdownDisplay();
-return;
-}
-if (path === '/scans' || path.startsWith('/scans/')) {
-const scansData = path === '/scans' ? data : null;
-if (scansData && typeof scansData === 'object') {
-Object.entries(scansData).forEach(([k, v]) => {
-if (!v || !v.codeProduct) return;
-if (!cloudHistory[k]) {
-cloudHistory[k] = v;
-}
-});
-} else if (path.startsWith('/scans/')) {
-const k = path.slice('/scans/'.length);
-const entryData = path === '/scans' ? data : null;
-if (entryData && typeof entryData === 'object') {
-Object.entries(entryData).forEach(([subK, v]) => {
-if (v === null) return;
-if (!v.codeProduct) return;
-if (!cloudHistory[subK]) {
-cloudHistory[subK] = v;
-}
-});
-}
-}
-onCloudUpdate();
-return;
-}
-if (path === '/peserta') {
-Object.entries(data || {}).forEach(([k, v]) => {
-if (v === null) delete participants[k];
-else participants[k] = v;
-});
-renderParticipants();
-return;
-}
-if (path.startsWith('/peserta/')) {
-const k = path.slice('/peserta/'.length);
-if (data === null) delete participants[k];
-else participants[k] = data;
-renderParticipants();
-return;
-}
-if (path === '/dupes' || path.startsWith('/dupes/')) {
-if (data && typeof data === 'object') dupeCount = Object.keys(data).length;
-updateStats();
-return;
-}
+applyEsResult(LG.applyEsPatch(getEsState(), path, data));
 });
 es.onerror = () => {
 if (!sessionId) return;
@@ -4383,27 +4546,8 @@ return;
 try {
 const res = await fetch(`${FIREBASE}/opname/${sessionId}.json`);
 const data = await res.json();
-if (data === null) {
-verifySessionAlive();
-return;
-}
-cloudHistory = data.history || {};
-if (data.scans) {
-Object.entries(data.scans).forEach(([k, v]) => {
-if (!v || !v.codeProduct) return;
-if (!cloudHistory[k]) {
-cloudHistory[k] = v;
-}
-});
-}
-participants = data.peserta || {};
-dupeCount = data.dupes ? Object.keys(data.dupes).length : 0;
-if (data.meta?.lastScanAt) {
-lastScanAt = data.meta.lastScanAt;
-updateCountdownDisplay();
-}
-onCloudUpdate();
-renderParticipants();
+applyEsResult(LG.applyEsPut(getEsState(), '/', data));
+if (data === null) return;
 esFailCount = 0;
 updateStatus('🟢 Koneksi pulih, data disinkronkan.');
 } catch (e) {
@@ -4775,28 +4919,8 @@ async function checkSoldProduct(cp) {
 try {
 const res = await fetch(`${API_BYCODE}${encodeURIComponent(cp)}`);
 if (!res.ok) return null;
-const d = await res.json();
-let item = null;
-if (Array.isArray(d) && d.length) item = d[0];
-else if (d.items?.length) item = d.items[0];
-else if (d.data?.length) item = d.data[0];
-else if (d.Name || d.FullName || d.Id) item = d;
-if (!item) return null;
-let code = item.CodeProduct || '';
-if (!code && item.FullName) code = item.FullName.split(' - ')[0].trim();
-if (!code) code = cp;
-return {
-codeProduct: code,
-code: item.Code || '-',
-name: item.Name || '',
-fullName: item.FullName || '',
-weight: item.WeightReal || item.WeightSystem || 0,
-price: LG.pickProductPrice(item),
-image: item.ProductPicture || '',
-kadar: item.Kadar || '',
-trayCode: item.TrayCode || '-',
-stockQty: item.StockQuantity ?? 0,
-};
+const item = LG.pickSoldItem(await res.json());
+return LG.normalizeSoldProduct(item, cp, (row) => LG.pickProductPrice(row));
 } catch (e) {
 return null;
 }
@@ -4884,6 +5008,128 @@ btn.textContent = 'CEK';
 }
 focusScanInput();
 }
+function alreadyScannedBy(cpL) {
+if (!isMulti()) return '';
+const foundEntry = Object.values(cloudHistory).find(v =>
+v && v.codeProduct && String(v.codeProduct).toLowerCase() === cpL && v.status === 'MASUK'
+);
+if (foundEntry && foundEntry.by) return ` (oleh ${esc(foundEntry.by)})`;
+return '';
+}
+function describeFoundScan(hit) {
+const found = hit.found;
+const identity = {
+imgUrl: found.image,
+finalCodeProduct: found.codeProduct,
+finalName: found.name,
+finalTray: found.trayCode,
+finalCode: found.code,
+};
+if (hit.kind === 'sudah') {
+return {
+...identity,
+st: ST.SUDAH,
+msg: `SUDAH DISCAN — "${esc(found.name)}" (${esc(found.codeProduct)}) · Baki ${esc(found.trayCode)}${alreadyScannedBy(hit.cpL)}`,
+dupe: found.codeProduct,
+};
+}
+if (hit.kind === 'salah-baki') {
+return {
+...identity,
+st: ST.SALAH_BAKI,
+msg: `SALAH BAKI — "${esc(found.name)}" seharusnya di Baki ${esc(found.trayCode)}`,
+};
+}
+return {
+...identity,
+st: ST.MASUK,
+msg: `MASUK — "${esc(found.name)}" · ${esc(found.codeProduct)} · ${found.weight} gr · Kadar ${esc(found.kadar)} · Baki ${esc(found.trayCode)} · Rp${Number(found.price).toLocaleString('id-ID')}`,
+};
+}
+function describeSoldScan(hit, code) {
+if (hit.kind === 'tidak-ada') {
+return {
+imgUrl: '',
+finalCodeProduct: code,
+finalName: '-',
+finalTray: '-',
+finalCode: '-',
+st: ST.TIDAK_ADA,
+msg: `BARCODE TIDAK ADA — "${esc(code)}" tidak ditemukan`,
+};
+}
+const soldItem = hit.soldItem;
+const finalName = soldItem.fullName || soldItem.name;
+const identity = {
+imgUrl: soldItem.image,
+finalCodeProduct: soldItem.codeProduct,
+finalName,
+finalTray: soldItem.trayCode,
+finalCode: soldItem.code,
+};
+if (hit.kind === 'salah-baki-sold') {
+return {
+...identity,
+st: ST.SALAH_BAKI,
+msg: `SALAH BAKI — "${esc(finalName)}" seharusnya di Baki ${esc(soldItem.trayCode)}`,
+};
+}
+return {
+...identity,
+st: ST.TERJUAL,
+msg: `TERJUAL / RUSAK — "${esc(finalName)}" · ${esc(soldItem.codeProduct)} · ${soldItem.weight} gr · Baki ${esc(soldItem.trayCode)} · Stock: ${soldItem.stockQty}`,
+};
+}
+function rememberScan(logEntry) {
+scanLog.unshift(logEntry);
+if (scanLog.length > MAX_SCAN_LOG) scanLog = scanLog.slice(0, MAX_SCAN_LOG);
+}
+async function persistScan(logEntry, st, view, now) {
+if (isMulti()) {
+rememberScan(logEntry);
+if (st === ST.MASUK) {
+scannedCodes.add(view.finalCodeProduct.toLowerCase());
+pendingLocalScans.add(view.finalCodeProduct.toLowerCase());
+}
+debouncedPersist();
+scheduleRender();
+updateLastScanAt();
+await pushScanToCloud({
+by: myName,
+time: now.toISOString(),
+status: st.label,
+codeProduct: view.finalCodeProduct,
+code: view.finalCode,
+name: view.finalName,
+tray: view.finalTray,
+image: view.imgUrl,
+});
+return;
+}
+if (st === ST.MASUK) scannedCodes.add(view.finalCodeProduct.toLowerCase());
+rememberScan(logEntry);
+persistScanLog();
+scheduleRender();
+updateLastScanAt();
+}
+function scanBeepFreq(st) {
+if (st === ST.MASUK) return 880;
+if (st === ST.SUDAH) return 440;
+return 220;
+}
+async function resolveScanView(code) {
+const found = productMap.get(code.toLowerCase());
+const hit = LG.classifyFoundScan({
+found,
+scanned: scannedCodes,
+pending: pendingLocalScans,
+selectedTray,
+});
+if (hit.kind !== 'lookup-sold') return describeFoundScan(hit);
+showResult(`🔍 Mengecek "${esc(code)}"…`, ST.SUDAH, '');
+const soldItem = await checkSoldProduct(code);
+return describeSoldScan(LG.classifySoldScan(soldItem), code);
+}
 async function doScanInternal(code) {
 if (!traySelected) {
 showResult('⚠️ Pilih baki spesifik terlebih dahulu sebelum scan!', ST.TIDAK_ADA, '');
@@ -4905,101 +5151,25 @@ btn.disabled = true;
 btn.textContent = '…';
 }
 const now = new Date();
-const found = productMap.get(code.toLowerCase());
-let st, msg, imgUrl = '', finalCodeProduct = code, finalName = '-', finalTray = '-', finalCode = '-';
-if (found) {
-imgUrl = found.image;
-finalCodeProduct = found.codeProduct;
-finalName = found.name;
-finalTray = found.trayCode;
-finalCode = found.code;
-const cpL = String(found.codeProduct).toLowerCase();
-if (scannedCodes.has(cpL) || pendingLocalScans.has(cpL)) {
-st = ST.SUDAH;
-const sKey = sanitizeKey(cpL);
-let byWhom = '';
-if (isMulti()) {
-const foundEntry = Object.values(cloudHistory).find(v =>
-v && v.codeProduct && String(v.codeProduct).toLowerCase() === cpL && v.status === 'MASUK'
-);
-if (foundEntry && foundEntry.by) {
-byWhom = ` (oleh ${esc(foundEntry.by)})`;
-}
-}
-msg = `SUDAH DISCAN — "${esc(found.name)}" (${esc(found.codeProduct)}) · Baki ${esc(found.trayCode)}${byWhom}`;
-pushDupe(found.codeProduct);
-} else if (String(found.trayId) !== selectedTray) {
-st = ST.SALAH_BAKI;
-msg = `SALAH BAKI — "${esc(found.name)}" seharusnya di Baki ${esc(found.trayCode)}`;
-} else {
-st = ST.MASUK;
-msg = `MASUK — "${esc(found.name)}" · ${esc(found.codeProduct)} · ${found.weight} gr · Kadar ${esc(found.kadar)} · Baki ${esc(found.trayCode)} · Rp${Number(found.price).toLocaleString('id-ID')}`;
-}
-} else {
-showResult(`🔍 Mengecek "${esc(code)}"…`, ST.SUDAH, '');
-const soldItem = await checkSoldProduct(code);
-if (soldItem) {
-imgUrl = soldItem.image;
-finalCodeProduct = soldItem.codeProduct;
-finalName = soldItem.fullName || soldItem.name;
-finalTray = soldItem.trayCode;
-finalCode = soldItem.code;
-if (soldItem.stockQty > 0) {
-st = ST.SALAH_BAKI;
-msg = `SALAH BAKI — "${esc(finalName)}" seharusnya di Baki ${esc(soldItem.trayCode)}`;
-} else {
-st = ST.TERJUAL;
-msg = `TERJUAL / RUSAK — "${esc(finalName)}" · ${esc(soldItem.codeProduct)} · ${soldItem.weight} gr · Baki ${esc(soldItem.trayCode)} · Stock: ${soldItem.stockQty}`;
-}
-} else {
-st = ST.TIDAK_ADA;
-msg = `BARCODE TIDAK ADA — "${esc(code)}" tidak ditemukan`;
-}
-}
+const view = await resolveScanView(code);
+if (view.dupe) pushDupe(view.dupe);
 const logEntry = {
 time: now.toLocaleString('id-ID'),
 timeIso: now.toISOString(),
 scanCode: code,
-codeProduct: finalCodeProduct,
-code: finalCode,
-name: finalName,
-tray: finalTray,
-image: imgUrl,
-status: st.label,
+codeProduct: view.finalCodeProduct,
+code: view.finalCode,
+name: view.finalName,
+tray: view.finalTray,
+image: view.imgUrl,
+status: view.st.label,
 by: myName || '',
 };
-if (isMulti()) {
-scanLog.unshift(logEntry);
-if (scanLog.length > MAX_SCAN_LOG) scanLog = scanLog.slice(0, MAX_SCAN_LOG);
-if (st === ST.MASUK) {
-scannedCodes.add(finalCodeProduct.toLowerCase());
-pendingLocalScans.add(finalCodeProduct.toLowerCase());
-}
-debouncedPersist();
-scheduleRender();
-updateLastScanAt();
-await pushScanToCloud({
-by: myName,
-time: now.toISOString(),
-status: st.label,
-codeProduct: finalCodeProduct,
-code: finalCode,
-name: finalName,
-tray: finalTray,
-image: imgUrl,
-});
-} else {
-if (st === ST.MASUK) scannedCodes.add(finalCodeProduct.toLowerCase());
-scanLog.unshift(logEntry);
-if (scanLog.length > MAX_SCAN_LOG) scanLog = scanLog.slice(0, MAX_SCAN_LOG);
-persistScanLog();
-scheduleRender();
-updateLastScanAt();
-}
-showResult(msg, st, imgUrl);
-beep(st === ST.MASUK ? 880 : st === ST.SUDAH ? 440 : 220);
-if (autoFillForm && st === ST.MASUK && shouldQueueToForm(logEntry)) {
-queueFormInput(finalCodeProduct);
+await persistScan(logEntry, view.st, view, now);
+showResult(view.msg, view.st, view.imgUrl);
+beep(scanBeepFreq(view.st));
+if (autoFillForm && view.st === ST.MASUK && shouldQueueToForm(logEntry)) {
+queueFormInput(view.finalCodeProduct);
 }
 }
 function beep(freq) {
