@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.58
-// @description  v1.0.58: block scan while tray productMap is still loading
+// @version      1.0.59
+// @description  v1.0.59: unbiased rejection sampling in randomBase36
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -597,12 +597,23 @@ const LG = {
     if (length == null) length = LG.SESSION_CODE_LENGTH;
     return `Kode sesi (${length} karakter)`;
   },
+  unbiasedBase36Index(byte) {
+    if (byte >= 252) return null;
+    return byte % 36;
+  },
   randomBase36(length) {
     const alphabet = '0123456789abcdefghijklmnopqrstuvwxyz';
-    const bytes = new Uint8Array(length);
-    crypto.getRandomValues(bytes);
     let out = '';
-    for (let i = 0; i < length; i++) out += alphabet[bytes[i] % 36];
+    while (out.length < length) {
+      const bytes = new Uint8Array(length - out.length);
+      crypto.getRandomValues(bytes);
+      for (let i = 0; i < bytes.length; i++) {
+        const idx = LG.unbiasedBase36Index(bytes[i]);
+        if (idx == null) continue;
+        out += alphabet[idx];
+        if (out.length === length) break;
+      }
+    }
     return out;
   },
   buildNiLookupUrl(origin, path, filter, pageSize, pageNumber) {
