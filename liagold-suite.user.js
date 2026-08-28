@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate (Totalizer + Scanner + Payment Detail)
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      1.0.57
-// @description  v1.0.57: session join placeholder matches 8-char codes
+// @version      1.0.58
+// @description  v1.0.58: block scan while tray productMap is still loading
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -216,6 +216,11 @@ const LG = {
     const merged = (cloudEntries || []).concat(extra);
     merged.sort((a, b) => String(b.timeIso || '').localeCompare(String(a.timeIso || '')));
     return merged;
+  },
+  scanLoadGuard({ isLoading, productCount }) {
+    if (isLoading) return 'loading';
+    if (!productCount) return 'empty';
+    return null;
   },
   pickProductPrice(item) {
     if (!item || typeof item !== 'object') return 0;
@@ -4874,7 +4879,12 @@ showResult('⚠️ Pilih baki spesifik terlebih dahulu sebelum scan!', ST.TIDAK_
 beep(200);
 return;
 }
-if (!allProducts.length) {
+const loadBlock = LG.scanLoadGuard({ isLoading, productCount: allProducts.length });
+if (loadBlock === 'loading') {
+showResult('Baki masih dimuat. Tunggu sebentar…', ST.TIDAK_ADA, '');
+return;
+}
+if (loadBlock === 'empty') {
 showResult('Data baki belum dimuat. Tunggu sebentar…', ST.TIDAK_ADA, '');
 return;
 }
