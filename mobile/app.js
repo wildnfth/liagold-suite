@@ -267,10 +267,12 @@ async function join() {
   try {
     const meta = await fbGet(`/opname/${code}/meta`);
     if (meta == null) {
+      localStorage.removeItem('lg_session');
       joinStatus.textContent = 'Sesi tidak ditemukan.';
       return;
     }
     if (shouldRejectExpiredJoin(meta.lastScanAt || meta.dibuat)) {
+      localStorage.removeItem('lg_session');
       joinStatus.textContent = 'Sesi sudah EXPIRED (>12 jam tanpa scan).';
       return;
     }
@@ -477,6 +479,7 @@ function leave() {
   if (es) es.close();
   es = null;
   sessionId = null;
+  try { localStorage.removeItem('lg_session'); } catch (e) {}
   joinScreen.hidden = false;
   scanScreen.hidden = true;
 }
@@ -557,3 +560,9 @@ function esc(str) {
 
 void ES_CLOSED;
 window.__lgSubmitCode = submitCode;
+
+const savedSession = (localStorage.getItem('lg_session') || '').trim().toUpperCase();
+if (savedSession) {
+  document.getElementById('join-code').value = savedSession;
+  join();
+}
