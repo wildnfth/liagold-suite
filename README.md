@@ -5,6 +5,7 @@ Userscript Tampermonkey untuk [liagold.cuan.co](https://liagold.cuan.co):
 - **Module 1** — Payment Method Detail (metode bayar + total bayar di tabel purchasing)
 - **Module 2** — Footer total kolom di halaman ERP lain
 - **Module 2b** — Total per metode bayar di halaman Penjualan (`/sales`), net batal jual
+- **Module 2c** — Total per metode bayar di `/purchasing` dan `/purchasing-non-invoice`
 - **Module 3** — Totalizer (klik-jumlahkan angka) + Scanner stock opname (solo/multiplayer)
 
 File utama: [`liagold-suite.user.js`](./liagold-suite.user.js).
