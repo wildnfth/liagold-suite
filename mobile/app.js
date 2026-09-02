@@ -10,6 +10,7 @@ import { lookupKey, buildLookupEntry } from './lib/lookup-queue.js';
 import { shouldAcceptDetectedCode } from './lib/scan-cooldown.js';
 import { pickLatestScan } from './lib/scan-latest.js';
 import { filterCodeSuggestions } from './lib/scan-suggest.js';
+import { filterProductsByScan, scanFilterCounts } from './lib/scan-filter.js';
 import { generateHistoryKey, sanitizeKey } from './lib/history-key.js';
 import { applyEsPut, applyEsPatch } from './lib/es-event.js';
 import { planEsOnError, ES_CLOSED } from './lib/es-reconnect.js';
@@ -37,6 +38,7 @@ const resultEl = document.getElementById('result');
 const statsEl = document.getElementById('stats');
 const pesertaEl = document.getElementById('peserta');
 const logEl = document.getElementById('log');
+const productsEl = document.getElementById('products');
 const trayEl = document.getElementById('tray');
 const scanInput = document.getElementById('scan-input');
 const suggestEl = document.getElementById('suggest');
@@ -78,6 +80,7 @@ let camHandle = null;
 let lastShownScanTime = '';
 let suggestItems = [];
 let suggestIndex = -1;
+let scanFilter = 'all';
 
 document.getElementById('join-name').value = myName;
 document.getElementById('join-btn').addEventListener('click', join);
@@ -116,6 +119,13 @@ document.addEventListener('click', (e) => {
 });
 trayEl.addEventListener('change', onTrayChange);
 document.getElementById('leave-btn').addEventListener('click', leave);
+document.querySelectorAll('.scan-tab').forEach((tab) => {
+  tab.addEventListener('click', () => {
+    scanFilter = tab.dataset.val;
+    document.querySelectorAll('.scan-tab').forEach((t) => t.classList.toggle('on', t === tab));
+    render();
+  });
+});
 
 export async function submitCode(raw) {
   hideSuggestions();
@@ -408,6 +418,38 @@ function render() {
   statsEl.textContent = `MASUK ${masuk} · katalog ${productCount} · dupes ${esState.dupeCount || 0}`;
   const names = Object.values(esState.participants || {}).map((p) => p && p.nama).filter(Boolean);
   pesertaEl.textContent = names.length ? `Online: ${names.join(', ')}` : 'Online: -';
+  const productList = catalogProductList();
+  const counts = scanFilterCounts({ products: productList, scanned: scannedCodes });
+  document.querySelectorAll('[data-count]').forEach((el) => {
+    el.textContent = String(counts[el.dataset.count] ?? 0);
+  });
+  if (productsEl) {
+    const filtered = filterProductsByScan({
+      products: productList,
+      scanned: scannedCodes,
+      filter: scanFilter,
+    });
+    if (!filtered.length) {
+      const msg = scanFilter === 'unscanned'
+        ? 'Semua sudah discan!'
+        : scanFilter === 'scanned'
+          ? 'Belum ada yang discan'
+          : 'Pilih baki untuk memuat';
+      productsEl.innerHTML = `<li class="empty">${msg}</li>`;
+    } else {
+      productsEl.innerHTML = filtered.map((p) => {
+        const sc = scannedCodes.has(String(p.codeProduct).toLowerCase());
+        return `<li class="${sc ? 'done' : ''}">
+          <div>
+            <div class="code">${esc(p.codeProduct)}</div>
+            <div class="name">${esc(p.name || '-')}</div>
+          </div>
+          <span class="meta">${esc(p.weight || 0)} gr</span>
+          <span>${sc ? '✅' : '⬜'}</span>
+        </li>`;
+      }).join('');
+    }
+  }
   const rows = Object.values(esState.cloudHistory || {})
     .filter((v) => v && v.codeProduct)
     .sort((a, b) => String(b.time || '').localeCompare(String(a.time || '')))

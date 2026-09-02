@@ -13,6 +13,7 @@ const files = [
   'camera-tune.js',
   'scan-latest.js',
   'scan-suggest.js',
+  'scan-filter.js',
   'es-event.js',
   'es-reconnect.js',
   'random-id.js',
