@@ -151,3 +151,63 @@ button.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line
 #products .name { color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #products .meta { color: var(--muted); font-size: 12px; }
 #products .empty { grid-column: 1 / -1; text-align: center; color: #94a3b8; padding: 16px; }
+#products li[data-photo] { cursor: pointer; }
+#photo-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 40;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  cursor: pointer;
+}
+#photo-overlay[hidden] { display: none; }
+.photo-card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 24px;
+  max-width: 520px;
+  width: 100%;
+  text-align: center;
+  cursor: default;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+}
+.photo-code {
+  font-weight: 800;
+  font-size: 16px;
+  font-family: ui-monospace, monospace;
+}
+.photo-weight {
+  font-size: 14px;
+  font-weight: 700;
+  color: #2563eb;
+  margin-top: 4px;
+}
+.photo-name {
+  font-size: 12px;
+  margin-top: 4px;
+  margin-bottom: 14px;
+}
+#photo-img-wrap img {
+  max-width: 100%;
+  max-height: 50vh;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+}
+.photo-missing { padding: 40px; color: #94a3b8; }
+.photo-actions {
+  margin-top: 16px;
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+.photo-actions button {
+  width: auto;
+  margin-top: 0;
+  padding: 8px 20px;
+  font-size: 13px;
+}
+#photo-close { background: #1e293b; color: #fff; border: 0; }

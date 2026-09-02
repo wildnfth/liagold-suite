@@ -11,6 +11,7 @@ import { shouldAcceptDetectedCode } from './lib/scan-cooldown.js';
 import { pickLatestScan } from './lib/scan-latest.js';
 import { filterCodeSuggestions } from './lib/scan-suggest.js';
 import { filterProductsByScan, scanFilterCounts, catalogProductList as productsFromCatalog, productScanCode } from './lib/scan-filter.js';
+import { photoOverlayView, productPhotoAttrs } from './lib/photo-overlay.js';
 import { generateHistoryKey, sanitizeKey } from './lib/history-key.js';
 import { applyEsPut, applyEsPatch } from './lib/es-event.js';
 import { planEsOnError, ES_CLOSED } from './lib/es-reconnect.js';
@@ -39,6 +40,11 @@ const statsEl = document.getElementById('stats');
 const pesertaEl = document.getElementById('peserta');
 const logEl = document.getElementById('log');
 const productsEl = document.getElementById('products');
+const photoOverlay = document.getElementById('photo-overlay');
+const photoTitle = document.getElementById('photo-title');
+const photoImgWrap = document.getElementById('photo-img-wrap');
+const photoFill = document.getElementById('photo-fill');
+const photoClose = document.getElementById('photo-close');
 const trayEl = document.getElementById('tray');
 const scanInput = document.getElementById('scan-input');
 const suggestEl = document.getElementById('suggest');
@@ -125,6 +131,28 @@ document.querySelector('.tabs')?.addEventListener('click', (e) => {
   e.preventDefault();
   scanFilter = tab.getAttribute('data-val') || 'all';
   render();
+});
+productsEl?.addEventListener('click', (e) => {
+  const row = e.target.closest('[data-photo]');
+  if (!row) return;
+  openPhotoOverlay({
+    img: row.getAttribute('data-img') || '',
+    name: row.getAttribute('data-name') || '',
+    code: row.getAttribute('data-code') || '',
+    weight: row.getAttribute('data-weight') || '',
+  });
+});
+photoOverlay?.addEventListener('click', (e) => {
+  if (e.target === photoOverlay) closePhotoOverlay();
+});
+photoClose?.addEventListener('click', closePhotoOverlay);
+photoFill?.addEventListener('click', () => {
+  const code = photoFill.dataset.code || '';
+  closePhotoOverlay();
+  if (!code) return;
+  submitCode(code);
+  scanInput.value = '';
+  scanInput.focus();
 });
 
 export async function submitCode(raw) {
@@ -442,7 +470,8 @@ function render() {
     } else {
       productsEl.innerHTML = filtered.map((p) => {
         const sc = scannedCodes.has(productScanCode(p));
-        return `<li class="${sc ? 'done' : ''}">
+        const photo = productPhotoAttrs(p);
+        return `<li class="${sc ? 'done' : ''}" data-photo data-img="${esc(photo.img)}" data-name="${esc(photo.name)}" data-code="${esc(photo.code)}" data-weight="${esc(photo.weight)}">
           <div>
             <div class="code">${esc(p.codeProduct)}</div>
             <div class="name">${esc(p.name || '-')}</div>
@@ -464,6 +493,51 @@ function render() {
 
 function catalogProductList() {
   return productsFromCatalog((esState.catalog && esState.catalog.products) || {});
+}
+
+function productByCodeMap() {
+  const map = new Map();
+  for (const p of catalogProductList()) {
+    const code = productScanCode(p);
+    if (code) map.set(code, p);
+  }
+  return map;
+}
+
+function openPhotoOverlay({ img, name, code, weight } = {}) {
+  if (!photoOverlay || !photoTitle || !photoImgWrap || !photoFill) return;
+  const view = photoOverlayView({
+    imgUrl: img,
+    name,
+    code,
+    weight,
+    productByCode: productByCodeMap(),
+  });
+  if (view.code) {
+    photoTitle.innerHTML = `<div class="photo-code">${esc(view.code)}</div>${view.weight ? `<div class="photo-weight">${esc(view.weight)}</div>` : ''}${view.name ? `<div class="photo-name">${esc(view.name)}</div>` : '<div class="photo-name"></div>'}`;
+  } else {
+    photoTitle.innerHTML = `<div class="photo-name">${esc(view.name || 'Produk')}</div>`;
+  }
+  if (view.missingImage) {
+    photoImgWrap.innerHTML = '<div class="photo-missing">Gambar tidak tersedia</div>';
+  } else {
+    photoImgWrap.innerHTML = `<img alt="" src="${esc(view.imgUrl)}">`;
+    const imgEl = photoImgWrap.querySelector('img');
+    if (imgEl) {
+      imgEl.addEventListener('error', () => {
+        photoImgWrap.innerHTML = '<div class="photo-missing">Gambar tidak tersedia</div>';
+      });
+    }
+  }
+  photoFill.hidden = !view.showFill;
+  photoFill.dataset.code = view.code || '';
+  photoOverlay.hidden = false;
+}
+
+function closePhotoOverlay() {
+  if (!photoOverlay) return;
+  photoOverlay.hidden = true;
+  if (photoFill) photoFill.dataset.code = '';
 }
 
 function updateSuggestions(query) {

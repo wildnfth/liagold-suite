@@ -14,6 +14,8 @@ const files = [
   'scan-latest.js',
   'scan-suggest.js',
   'scan-filter.js',
+  'photo-caption.js',
+  'photo-overlay.js',
   'es-event.js',
   'es-reconnect.js',
   'random-id.js',
