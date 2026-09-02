@@ -47,6 +47,72 @@ const LG = {
     const ts = String(timestamp || '');
     return LG.sanitizeKey(cp + '_' + ts);
   },
+  productCatalogKey(codeProduct) {
+    return LG.sanitizeKey(String(codeProduct || '').toLowerCase());
+  },
+  buildCatalogPayload({ trays, selectedTray, selectedTrayCode, products, now } = {}) {
+    const trayMap = {};
+    for (const t of trays || []) {
+      if (t == null || t.trayId == null) continue;
+      trayMap[String(t.trayId)] = {
+        trayId: t.trayId,
+        trayCode: t.trayCode || '-',
+        count: t.count || 0,
+      };
+    }
+    const productMap = {};
+    for (const p of products || []) {
+      if (!p || !p.codeProduct) continue;
+      productMap[LG.productCatalogKey(p.codeProduct)] = {
+        codeProduct: p.codeProduct,
+        code: p.code || '',
+        name: p.name || '',
+        weight: p.weight || 0,
+        image: p.image || '',
+        trayId: p.trayId ?? null,
+        trayCode: p.trayCode || '-',
+        kadar: p.kadar || '',
+        size: p.size || '',
+        group: p.group || '',
+      };
+    }
+    const iso = typeof now === 'string' ? now : new Date(now || Date.now()).toISOString();
+    return {
+      updatedAt: iso,
+      selectedTray: selectedTray == null ? 'all' : String(selectedTray),
+      selectedTrayCode: selectedTrayCode == null ? '' : String(selectedTrayCode),
+      trays: trayMap,
+      products: productMap,
+    };
+  },
+  withHostAt(payload, now) {
+    const iso = typeof now === 'string' ? now : new Date(now || Date.now()).toISOString();
+    return { ...(payload || {}), hostAt: iso };
+  },
+  shouldApplyRemoteTray({ localTray, remoteTray } = {}) {
+    if (remoteTray == null || remoteTray === '') return false;
+    return String(localTray) !== String(remoteTray);
+  },
+  isCatalogHostAlive(hostAt, now = Date.now(), maxAgeMs = 45000) {
+    const t = typeof hostAt === 'number' ? hostAt : new Date(hostAt).getTime();
+    if (!Number.isFinite(t)) return false;
+    const n = typeof now === 'number' ? now : new Date(now).getTime();
+    if (!Number.isFinite(n)) return false;
+    return (n - t) < maxAgeMs;
+  },
+  canAcceptScan({ hostAt, now, selectedTray, productCount } = {}) {
+    if (!LG.isCatalogHostAlive(hostAt, now)) return 'host-stale';
+    if (selectedTray == null || selectedTray === '' || selectedTray === 'all') return 'no-tray';
+    if (!productCount) return 'empty';
+    return null;
+  },
+  productsMatchTray(products, selectedTray) {
+    if (selectedTray == null || selectedTray === '' || selectedTray === 'all') return false;
+    const list = products && typeof products === 'object' ? Object.values(products) : [];
+    if (!list.length) return false;
+    const tray = String(selectedTray);
+    return list.every((p) => p && String(p.trayId) === tray);
+  },
   sessionResetUrls(base, sessionId) {
     return ['history', 'scans', 'dupes'].map(
       (node) => `${String(base).replace(/\/$/, '')}/opname/${sessionId}/${node}.json`
@@ -4209,6 +4275,52 @@ body: JSON.stringify(data)
 });
 if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
+let catalogWriteTimer = null;
+let hostBeatTimer = null;
+let applyingRemoteTray = false;
+function catalogNow() {
+return new Date().toISOString();
+}
+function selectedTrayCodeOf() {
+const info = trayList.find((t) => String(t.trayId) === String(selectedTray));
+return info ? info.trayCode : '';
+}
+async function writeCatalog() {
+if (!isMulti() || !sessionId) return;
+const payload = LG.withHostAt(LG.buildCatalogPayload({
+trays: trayList,
+selectedTray,
+selectedTrayCode: selectedTrayCodeOf(),
+products: allProducts,
+now: catalogNow(),
+}), catalogNow());
+await fbPut(`/opname/${sessionId}/catalog`, payload);
+}
+function scheduleCatalogWrite() {
+if (!isMulti() || !sessionId) return;
+if (catalogWriteTimer) clearTimeout(catalogWriteTimer);
+catalogWriteTimer = setTimeout(() => {
+catalogWriteTimer = null;
+writeCatalog().catch(() => {});
+}, 200);
+}
+function startCatalogHeartbeat() {
+if (hostBeatTimer) return;
+hostBeatTimer = setInterval(() => {
+if (!isMulti() || !sessionId) return;
+fbPut(`/opname/${sessionId}/catalog/hostAt`, catalogNow()).catch(() => {});
+}, 15000);
+}
+function stopCatalogHeartbeat() {
+if (hostBeatTimer) {
+clearInterval(hostBeatTimer);
+hostBeatTimer = null;
+}
+if (catalogWriteTimer) {
+clearTimeout(catalogWriteTimer);
+catalogWriteTimer = null;
+}
+}
 async function pushScanToCloud(entry, retries = 3) {
 if (!isMulti()) return;
 const uniqueKey = generateHistoryKey(entry.codeProduct, entry.time);
@@ -4416,6 +4528,7 @@ cleanupSessionLocal();
 updateStatus('🔴 Keluar dari sesi. Mode solo.');
 }
 function cleanupSessionLocal() {
+stopCatalogHeartbeat();
 if (esReconnectTimer) {
 clearTimeout(esReconnectTimer);
 esReconnectTimer = null;
@@ -4517,6 +4630,19 @@ cleanupSessionLocal();
 updateStatus('🗑️ Sesi dihapus oleh peserta lain — kamu otomatis keluar.');
 alert(`🗑️ Sesi telah DIHAPUS oleh peserta lain.\nKamu otomatis kembali ke MODE SOLO.\nData scan di device ini tetap tersimpan lokal.`);
 }
+function onCatalogUpdate() {
+if (!isMulti() || applyingRemoteTray) return;
+const remote = catalog && catalog.selectedTray;
+if (!LG.shouldApplyRemoteTray({ localTray: selectedTray, remoteTray: remote })) return;
+const info = trayList.find((t) => String(t.trayId) === String(remote));
+const label = remote === 'all' ? 'Semua Baki' : (info ? `Baki ${info.trayCode}` : `Baki ${remote}`);
+applyingRemoteTray = true;
+try {
+selectTray(String(remote), label, { fromRemote: true });
+} finally {
+applyingRemoteTray = false;
+}
+}
 function getEsState() {
 return { cloudHistory, participants, dupeCount, lastScanAt, catalog, lookups };
 }
@@ -4534,7 +4660,7 @@ updateCountdownDisplay,
 onCloudUpdate,
 renderParticipants,
 updateStats,
-onCatalogUpdate() {},
+onCatalogUpdate,
 onLookupsUpdate() {},
 };
 for (const name of result.effects || []) {
@@ -4550,6 +4676,8 @@ esReconnectTimer = null;
 if (es) es.close();
 esFailCount = 0;
 es = new EventSource(`${FIREBASE}/opname/${sessionId}.json`);
+startCatalogHeartbeat();
+scheduleCatalogWrite();
 es.addEventListener('put', e => {
 let path, data;
 try {
@@ -4786,6 +4914,7 @@ resetScanTabUI();
 renderTrayDropdown('');
 applyFilters();
 updateStatus(`✅ ${trayList.length} baki · ${allProducts.length} produk`);
+scheduleCatalogWrite();
 if (panelVisible || pendingFormTraySelect) autoSelectFormTray();
 } catch (e) {
 if (myLoadId !== currentLoadId) return;
@@ -4830,6 +4959,7 @@ allProducts = tmp;
 rebuildProductMap();
 applyFilters();
 updateStatus(`✅ ${label}: ${allProducts.length} produk dimuat`);
+scheduleCatalogWrite();
 } catch (e) {
 if (myLoadId !== currentLoadId) return;
 updateStatus(`⚠️ Gagal: ${e.message}`);
@@ -4874,6 +5004,7 @@ opt.addEventListener('click', () => selectTray(opt.dataset.val, opt.dataset.labe
 });
 }
 function selectTray(val, label, opts) {
+const fromRemote = !!(opts && opts.fromRemote);
 selectedTray = val;
 traySelected = (val !== 'all');
 statusFilter = 'none';
@@ -4885,6 +5016,7 @@ document.getElementById('lg-tray-info').textContent = info
 : (val === 'all' ? '⚠️ Pilih baki spesifik untuk memulai scan' : '');
 loadTrayData(val);
 focusScanInput();
+if (!fromRemote) scheduleCatalogWrite();
 if (!opts || opts.syncForm !== false) syncFormTrayFromScanner();
 }
 function syncFormTrayFromScanner() {
