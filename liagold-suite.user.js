@@ -86,9 +86,13 @@ const LG = {
       '/scans': 'scans',
       '/peserta': 'peserta',
       '/dupes': 'dupes',
+      '/catalog': 'catalog',
+      '/lookups': 'lookups',
     }[path];
     if (exact) return { kind: exact };
     const prefixes = [
+      ['/catalog/', 'catalogField'],
+      ['/lookups/', 'lookupItem'],
       ['/history/', 'historyItem'],
       ['/scans/', 'scanItem'],
       ['/peserta/', 'pesertaItem'],
@@ -123,6 +127,8 @@ const LG = {
       effects.push('updateCountdownDisplay');
     }
     effects.push('onCloudUpdate', 'renderParticipants');
+    if (data.catalog !== undefined) effects.push('onCatalogUpdate');
+    if (data.lookups !== undefined) effects.push('onLookupsUpdate');
     let cloudHistory = data.history || {};
     cloudHistory = LG.mergeScansIntoHistory(cloudHistory, data.scans);
     return {
@@ -132,6 +138,8 @@ const LG = {
         participants: data.peserta || {},
         dupeCount: data.dupes ? Object.keys(data.dupes).length : 0,
         lastScanAt,
+        catalog: data.catalog === undefined ? state.catalog : data.catalog,
+        lookups: data.lookups === undefined ? (state.lookups || {}) : (data.lookups || {}),
       },
       effects,
     };
@@ -197,6 +205,24 @@ const LG = {
       : state.dupeCount + 1;
     return { state: { ...state, dupeCount }, effects: ['updateStats'] };
   },
+  putCatalog(state, data) {
+    return { state: { ...state, catalog: data }, effects: ['onCatalogUpdate'] };
+  },
+  putCatalogField(state, data, { key }) {
+    const catalog = { ...(state.catalog || {}) };
+    if (data === null) delete catalog[key];
+    else catalog[key] = data;
+    return { state: { ...state, catalog }, effects: ['onCatalogUpdate'] };
+  },
+  putLookups(state, data) {
+    return { state: { ...state, lookups: data || {} }, effects: ['onLookupsUpdate'] };
+  },
+  putLookupItem(state, data, { key }) {
+    const lookups = { ...(state.lookups || {}) };
+    if (data === null) delete lookups[key];
+    else lookups[key] = data;
+    return { state: { ...state, lookups }, effects: ['onLookupsUpdate'] };
+  },
   applyEsPut(state, path, data) {
     const classified = LG.classifyEsPath(path);
     const handler = {
@@ -211,6 +237,10 @@ const LG = {
       pesertaItem: LG.putPesertaItem,
       dupes: LG.putDupes,
       dupeItem: LG.putDupeItem,
+      catalog: LG.putCatalog,
+      catalogField: LG.putCatalogField,
+      lookups: LG.putLookups,
+      lookupItem: LG.putLookupItem,
     }[classified.kind];
     if (!handler) return { state, effects: [] };
     return handler(state, data, classified);
@@ -231,7 +261,15 @@ const LG = {
         if (!value || typeof value !== 'object') return;
         next.cloudHistory = LG.mergeScansIntoHistory(next.cloudHistory, value);
       },
-    };
+      catalog(value) {
+        next.catalog = value;
+        effects.push('onCatalogUpdate');
+      },
+      lookups(value) {
+        next.lookups = value || {};
+        effects.push('onLookupsUpdate');
+      },
+      };
     for (const [key, value] of Object.entries(data || {})) {
       const apply = applyField[key];
       if (apply) apply(value);
@@ -291,6 +329,10 @@ const LG = {
       pesertaItem: LG.putPesertaItem,
       dupes: LG.patchDupes,
       dupeItem: LG.patchDupes,
+      catalog: LG.putCatalog,
+      catalogField: LG.putCatalogField,
+      lookups: LG.putLookups,
+      lookupItem: LG.putLookupItem,
     }[classified.kind];
     if (!handler) return { state, effects: [] };
     return handler(state, data, classified);
@@ -3614,6 +3656,8 @@ return id;
 let cloudHistory = {};
 let participants = {};
 let dupeCount = 0;
+let catalog = null;
+let lookups = {};
 let es = null;
 let esFailCount = 0;
 let esReconnectTimer = null;
@@ -4474,7 +4518,7 @@ updateStatus('🗑️ Sesi dihapus oleh peserta lain — kamu otomatis keluar.')
 alert(`🗑️ Sesi telah DIHAPUS oleh peserta lain.\nKamu otomatis kembali ke MODE SOLO.\nData scan di device ini tetap tersimpan lokal.`);
 }
 function getEsState() {
-return { cloudHistory, participants, dupeCount, lastScanAt };
+return { cloudHistory, participants, dupeCount, lastScanAt, catalog, lookups };
 }
 function applyEsResult(result) {
 if (!result || !result.state) return;
@@ -4482,12 +4526,16 @@ cloudHistory = result.state.cloudHistory;
 participants = result.state.participants;
 dupeCount = result.state.dupeCount;
 lastScanAt = result.state.lastScanAt;
+catalog = result.state.catalog;
+lookups = result.state.lookups || {};
 const effects = {
 verifySessionAlive,
 updateCountdownDisplay,
 onCloudUpdate,
 renderParticipants,
 updateStats,
+onCatalogUpdate() {},
+onLookupsUpdate() {},
 };
 for (const name of result.effects || []) {
 const fn = effects[name];

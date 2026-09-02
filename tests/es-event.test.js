@@ -11,6 +11,8 @@ describe('classifyEsPath', () => {
     assert.deepEqual(classifyEsPath('/scans'), { kind: 'scans' });
     assert.deepEqual(classifyEsPath('/peserta'), { kind: 'peserta' });
     assert.deepEqual(classifyEsPath('/dupes'), { kind: 'dupes' });
+    assert.deepEqual(classifyEsPath('/catalog'), { kind: 'catalog' });
+    assert.deepEqual(classifyEsPath('/lookups'), { kind: 'lookups' });
   });
 
   it('strips the collection prefix for item paths', () => {
@@ -18,6 +20,8 @@ describe('classifyEsPath', () => {
     assert.deepEqual(classifyEsPath('/scans/abc_1'), { kind: 'scanItem', key: 'abc_1' });
     assert.deepEqual(classifyEsPath('/peserta/u1'), { kind: 'pesertaItem', key: 'u1' });
     assert.deepEqual(classifyEsPath('/dupes/x'), { kind: 'dupeItem', key: 'x' });
+    assert.deepEqual(classifyEsPath('/catalog/selectedTray'), { kind: 'catalogField', key: 'selectedTray' });
+    assert.deepEqual(classifyEsPath('/lookups/ab_t1'), { kind: 'lookupItem', key: 'ab_t1' });
   });
 
   it('does not treat an unknown path as a known collection', () => {
@@ -31,6 +35,8 @@ function blankState(overrides = {}) {
     participants: {},
     dupeCount: 0,
     lastScanAt: null,
+    catalog: null,
+    lookups: {},
     ...overrides,
   };
 }
@@ -122,6 +128,24 @@ describe('applyEsPut', () => {
     assert.equal(plus.state.dupeCount, 3);
     const minus = applyEsPut(blankState({ dupeCount: 2 }), '/dupes/x', null);
     assert.equal(minus.state.dupeCount, 1);
+  });
+
+  it('stores catalog and lookups from root and leaf paths', () => {
+    const catalog = { selectedTray: '14', hostAt: 't1', products: {} };
+    const lookups = { k1: { code: 'A', state: 'pending' } };
+    const root = applyEsPut(blankState(), '/', { catalog, lookups, history: {}, peserta: {}, dupes: null });
+    assert.deepEqual(root.state.catalog, catalog);
+    assert.deepEqual(root.state.lookups, lookups);
+    assert.ok(root.effects.includes('onCatalogUpdate'));
+    assert.ok(root.effects.includes('onLookupsUpdate'));
+    const leaf = applyEsPut(blankState(), '/catalog', catalog);
+    assert.deepEqual(leaf.state.catalog, catalog);
+    assert.deepEqual(leaf.effects, ['onCatalogUpdate']);
+    const field = applyEsPut(blankState({ catalog: { selectedTray: 'all' } }), '/catalog/selectedTray', '14');
+    assert.equal(field.state.catalog.selectedTray, '14');
+    const item = applyEsPut(blankState(), '/lookups/k1', { code: 'A', state: 'pending' });
+    assert.equal(item.state.lookups.k1.code, 'A');
+    assert.deepEqual(item.effects, ['onLookupsUpdate']);
   });
 });
 
