@@ -33,9 +33,12 @@
     <label>Baki
       <select id="tray"></select>
     </label>
-    <div class="scan-row">
-      <input id="scan-input" type="text" autocomplete="off" placeholder="Kode / barcode">
-      <button id="scan-btn" type="button">CEK</button>
+    <div class="scan-wrap">
+      <div class="scan-row">
+        <input id="scan-input" type="text" autocomplete="off" placeholder="Kode / barcode">
+        <button id="scan-btn" type="button">CEK</button>
+      </div>
+      <div id="suggest" hidden></div>
     </div>
     <p id="result" class="result"></p>
     <p id="stats" class="stats"></p>

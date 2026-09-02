@@ -8,6 +8,8 @@ import {
 } from './lib/catalog-sync.js';
 import { lookupKey, buildLookupEntry } from './lib/lookup-queue.js';
 import { shouldAcceptDetectedCode } from './lib/scan-cooldown.js';
+import { pickLatestScan } from './lib/scan-latest.js';
+import { filterCodeSuggestions } from './lib/scan-suggest.js';
 import { generateHistoryKey, sanitizeKey } from './lib/history-key.js';
 import { applyEsPut, applyEsPatch } from './lib/es-event.js';
 import { planEsOnError, ES_CLOSED } from './lib/es-reconnect.js';
@@ -37,6 +39,7 @@ const pesertaEl = document.getElementById('peserta');
 const logEl = document.getElementById('log');
 const trayEl = document.getElementById('tray');
 const scanInput = document.getElementById('scan-input');
+const suggestEl = document.getElementById('suggest');
 
 let sessionId = null;
 let myName = localStorage.getItem('lg_mp_name') || '';
@@ -72,23 +75,50 @@ try {
 let retryTimer = null;
 let audioCtx = null;
 let camHandle = null;
+let lastShownScanTime = '';
+let suggestItems = [];
+let suggestIndex = -1;
 
 document.getElementById('join-name').value = myName;
 document.getElementById('join-btn').addEventListener('click', join);
 document.getElementById('scan-btn').addEventListener('click', () => {
+  hideSuggestions();
   submitCode(scanInput.value);
   scanInput.value = '';
   scanInput.focus();
 });
+scanInput.addEventListener('input', () => updateSuggestions(scanInput.value));
 scanInput.addEventListener('keydown', (e) => {
-  if (e.key !== 'Enter') return;
-  submitCode(scanInput.value);
-  scanInput.value = '';
+  if (e.key === 'ArrowDown' && suggestItems.length) {
+    e.preventDefault();
+    highlightSuggest(Math.min(suggestItems.length - 1, suggestIndex + 1));
+    return;
+  }
+  if (e.key === 'ArrowUp' && suggestItems.length) {
+    e.preventDefault();
+    highlightSuggest(Math.max(0, suggestIndex - 1));
+    return;
+  }
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    if (suggestIndex >= 0 && suggestItems[suggestIndex]) {
+      pickSuggestion(suggestItems[suggestIndex].code);
+      return;
+    }
+    hideSuggestions();
+    submitCode(scanInput.value);
+    scanInput.value = '';
+  }
+  if (e.key === 'Escape') hideSuggestions();
+});
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('#scan-input') && !e.target.closest('#suggest')) hideSuggestions();
 });
 trayEl.addEventListener('change', onTrayChange);
 document.getElementById('leave-btn').addEventListener('click', leave);
 
 export async function submitCode(raw) {
+  hideSuggestions();
   const code = String(raw || '').trim();
   if (!code) return;
   const catalog = esState.catalog || {};
@@ -149,6 +179,7 @@ export async function submitCode(raw) {
     fbPost(`/opname/${sessionId}/dupes`, { code: product.codeProduct, by: myName, time: iso }).catch(() => {});
   }
   await persistHistory(entry);
+  lastShownScanTime = iso;
   showResult(`${status} — ${product.name || product.codeProduct}`, classFor(status));
   beep(hit.kind === 'masuk' ? 880 : hit.kind === 'sudah' ? 440 : 220);
 }
@@ -281,11 +312,26 @@ function applyEs(result) {
     );
     if (hit) {
       lookupWait = null;
+      lastShownScanTime = String(hit.time || '');
       showResult(`${hit.status} — ${hit.name || hit.codeProduct}`, classFor(hit.status));
       beep(hit.status === ST.MASUK ? 880 : 220);
     }
   }
+  syncLatestBanner();
   render();
+}
+
+function syncLatestBanner() {
+  const latest = pickLatestScan(esState.cloudHistory);
+  if (!latest) return;
+  const t = String(latest.time || '');
+  if (!t || t === lastShownScanTime) return;
+  lastShownScanTime = t;
+  const who = latest.by && latest.by !== myName ? ` · ${latest.by}` : '';
+  showResult(
+    `${latest.status} — ${latest.name || '-'} (${latest.codeProduct})${who}`,
+    classFor(latest.status),
+  );
 }
 
 function rebuildScanned() {
@@ -367,6 +413,60 @@ function render() {
   logEl.innerHTML = rows.map((v) => (
     `<li>${esc(v.status)} · ${esc(v.codeProduct)} · ${esc(v.name || '-')} · ${esc(v.by || '')}</li>`
   )).join('');
+}
+
+function catalogProductList() {
+  return Object.values((esState.catalog && esState.catalog.products) || {});
+}
+
+function updateSuggestions(query) {
+  suggestItems = filterCodeSuggestions({
+    query,
+    products: catalogProductList(),
+    limit: 8,
+    maxNameLen: 22,
+  });
+  suggestIndex = -1;
+  if (!suggestEl) return;
+  if (!suggestItems.length) {
+    hideSuggestions();
+    return;
+  }
+  suggestEl.hidden = false;
+  suggestEl.innerHTML = suggestItems.map((item, i) => (
+    `<div data-idx="${i}"><b>${esc(item.code)}</b> <span>${esc(item.name || '')}</span></div>`
+  )).join('');
+  suggestEl.querySelectorAll('div').forEach((opt) => {
+    opt.addEventListener('click', () => {
+      const item = suggestItems[Number(opt.dataset.idx)];
+      if (item) pickSuggestion(item.code);
+    });
+  });
+}
+
+function hideSuggestions() {
+  suggestItems = [];
+  suggestIndex = -1;
+  if (suggestEl) {
+    suggestEl.hidden = true;
+    suggestEl.innerHTML = '';
+  }
+}
+
+function highlightSuggest(idx) {
+  suggestIndex = idx;
+  if (!suggestEl) return;
+  suggestEl.querySelectorAll('div').forEach((opt, i) => {
+    opt.style.background = i === suggestIndex ? '#eff6ff' : '#fff';
+  });
+}
+
+function pickSuggestion(code) {
+  scanInput.value = code;
+  hideSuggestions();
+  submitCode(code);
+  scanInput.value = '';
+  scanInput.focus();
 }
 
 function leave() {
