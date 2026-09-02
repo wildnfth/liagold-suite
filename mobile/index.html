@@ -22,8 +22,14 @@
   </section>
 
   <section id="scan-screen" hidden>
-    <video id="cam" playsinline muted autoplay></video>
+    <div class="cam-wrap">
+      <video id="cam" playsinline muted autoplay></video>
+      <div id="cam-flash" class="cam-flash"></div>
+    </div>
     <p id="cam-status" class="status"></p>
+    <label id="zoom-wrap" hidden>Zoom
+      <input id="zoom" type="range">
+    </label>
     <label>Baki
       <select id="tray"></select>
     </label>

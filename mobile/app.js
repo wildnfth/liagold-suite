@@ -118,6 +118,7 @@ export async function submitCode(raw) {
   if (!shouldAcceptDetectedCode({ code, lastCode, lastAt, now })) return;
   lastCode = code;
   lastAt = now;
+  signalHit();
 
   const found = findProduct(products, code);
   const hit = classifyFoundScan({
@@ -383,6 +384,8 @@ function leave() {
 async function startCam() {
   const videoEl = document.getElementById('cam');
   const camStatus = document.getElementById('cam-status');
+  const zoomWrap = document.getElementById('zoom-wrap');
+  const zoomInput = document.getElementById('zoom');
   camHandle = await startCamera({
     videoEl,
     onCode: submitCode,
@@ -390,6 +393,31 @@ async function startCam() {
       camStatus.textContent = 'Izinkan kamera, atau ketik kodenya';
     },
   });
+  const caps = camHandle && camHandle.zoomCaps;
+  if (!caps || !zoomWrap || !zoomInput) {
+    if (zoomWrap) zoomWrap.hidden = true;
+    return;
+  }
+  zoomWrap.hidden = false;
+  zoomInput.min = String(caps.min);
+  zoomInput.max = String(caps.max);
+  zoomInput.step = String(caps.step);
+  zoomInput.value = String(caps.min);
+  zoomInput.oninput = () => {
+    camHandle.setZoom(zoomInput.value);
+  };
+}
+
+function signalHit() {
+  const flash = document.getElementById('cam-flash');
+  if (flash) {
+    flash.classList.remove('on');
+    void flash.offsetWidth;
+    flash.classList.add('on');
+  }
+  try {
+    if (navigator.vibrate) navigator.vibrate(40);
+  } catch (e) {}
 }
 
 function showResult(msg, kind) {

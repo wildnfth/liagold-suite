@@ -10,6 +10,7 @@ const files = [
   'catalog-sync.js',
   'lookup-queue.js',
   'scan-cooldown.js',
+  'camera-tune.js',
   'es-event.js',
   'es-reconnect.js',
   'random-id.js',
