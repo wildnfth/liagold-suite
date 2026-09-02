@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>LiaGold Scan HP</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <section id="join-screen">
+    <h1>Scan baki</h1>
+    <p class="hint">Laptop wajib nyala. Ketik kode sesi yang sama.</p>
+    <label>Nama
+      <input id="join-name" type="text" autocomplete="nickname" placeholder="Anonim">
+    </label>
+    <label>Kode sesi
+      <input id="join-code" type="text" autocapitalize="characters" autocomplete="off" placeholder="Kode sesi">
+    </label>
+    <button id="join-btn" type="button">Masuk</button>
+    <p id="join-status" class="status"></p>
+    <p class="footer">phone-scanner 1</p>
+  </section>
+
+  <section id="scan-screen" hidden>
+    <video id="cam" playsinline muted autoplay></video>
+    <p id="cam-status" class="status"></p>
+    <label>Baki
+      <select id="tray"></select>
+    </label>
+    <div class="scan-row">
+      <input id="scan-input" type="text" autocomplete="off" placeholder="Kode / barcode">
+      <button id="scan-btn" type="button">CEK</button>
+    </div>
+    <p id="result" class="result"></p>
+    <p id="stats" class="stats"></p>
+    <p id="peserta" class="peserta"></p>
+    <ul id="log"></ul>
+    <button id="leave-btn" type="button" class="ghost">Keluar</button>
+  </section>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
