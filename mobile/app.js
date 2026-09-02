@@ -12,6 +12,7 @@ import { generateHistoryKey, sanitizeKey } from './lib/history-key.js';
 import { applyEsPut, applyEsPatch } from './lib/es-event.js';
 import { planEsOnError, ES_CLOSED } from './lib/es-reconnect.js';
 import { randomBase36 } from './lib/random-id.js';
+import { startCamera } from './camera.js';
 
 const ST = {
   MASUK: 'MASUK',
@@ -70,6 +71,7 @@ try {
 }
 let retryTimer = null;
 let audioCtx = null;
+let camHandle = null;
 
 document.getElementById('join-name').value = myName;
 document.getElementById('join-btn').addEventListener('click', join);
@@ -247,6 +249,7 @@ async function join() {
     scanScreen.hidden = false;
     listen();
     scheduleRetry();
+    startCam();
   } catch (e) {
     joinStatus.textContent = 'Gagal masuk: ' + e.message;
   }
@@ -366,11 +369,27 @@ function render() {
 }
 
 function leave() {
+  if (camHandle) {
+    camHandle.stop();
+    camHandle = null;
+  }
   if (es) es.close();
   es = null;
   sessionId = null;
   joinScreen.hidden = false;
   scanScreen.hidden = true;
+}
+
+async function startCam() {
+  const videoEl = document.getElementById('cam');
+  const camStatus = document.getElementById('cam-status');
+  camHandle = await startCamera({
+    videoEl,
+    onCode: submitCode,
+    onDenied() {
+      camStatus.textContent = 'Izinkan kamera, atau ketik kodenya';
+    },
+  });
 }
 
 function showResult(msg, kind) {
