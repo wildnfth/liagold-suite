@@ -17,6 +17,12 @@ File utama: [`liagold-suite.user.js`](./liagold-suite.user.js).
 
 Repo ini **private**. Update manual dari repo, bukan lewat `@updateURL` publik.
 
+## Phone scanner
+
+Static site in `mobile/`. Join the same multiplayer session code from the userscript. Laptop must stay open (catalog heartbeat). Camera needs HTTPS.
+
+Deploy: copy lib with `node scripts/sync-mobile-lib.mjs`, then Firebase Hosting (`public: mobile`). Put the live URL here after first deploy.
+
 ## Maintenance
 
 - Bug tracker: [Issues](https://github.com/wildnfth/liagold-suite/issues)

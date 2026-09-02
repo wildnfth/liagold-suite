@@ -21,6 +21,11 @@ know you need public list.
           "$key": {
             ".validate": "newData.hasChildren(['codeProduct', 'status', 'time'])"
           }
+        },
+        "lookups": {
+          "$key": {
+            ".validate": "newData.hasChildren(['code', 'by', 'time', 'state'])"
+          }
         }
       }
     }
@@ -30,6 +35,9 @@ know you need public list.
 
 Do **not** set `".read": true` / `".write": true` on the database root — that
 lets anyone list every session.
+
+`catalog` is allowed by the session write rule. `catalog/hostAt` is a string
+leaf written every 15s by the laptop userscript.
 
 The script no longer auto-`DELETE`s `/opname/$session` when the 12h TTL
 fires. Use **Selesai & Hapus** in the panel when the team is done.
