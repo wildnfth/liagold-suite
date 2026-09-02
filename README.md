@@ -19,9 +19,11 @@ Repo ini **private**. Update manual dari repo, bukan lewat `@updateURL` publik.
 
 ## Phone scanner
 
-Static site in `mobile/`. Join the same multiplayer session code from the userscript. Laptop must stay open (catalog heartbeat). Camera needs HTTPS.
+Live: https://scan.tokomaslia.com
 
-Deploy: copy lib with `node scripts/sync-mobile-lib.mjs`, then Firebase Hosting (`public: mobile`). Put the live URL here after first deploy.
+Join the same multiplayer session code from the userscript. Laptop must stay open (catalog heartbeat). Camera needs HTTPS.
+
+Deploy: `node scripts/sync-mobile-lib.mjs` then `wrangler deploy` (Cloudflare Worker `liagold-scan`, custom domain `scan.tokomaslia.com`).
 
 ## Maintenance
 

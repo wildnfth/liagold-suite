@@ -1,0 +1,10 @@
+name = "liagold-scan"
+compatibility_date = "2026-09-02"
+workers_dev = true
+
+[assets]
+directory = "./mobile"
+
+[[routes]]
+pattern = "scan.tokomaslia.com"
+custom_domain = true
