@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.0.0
-// @description  v2.0.0: split CC≥15 functions into lib
+// @version      2.1.0
+// @description  v2.1.0: phone scanner catalog mirror + lookup consumer
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
