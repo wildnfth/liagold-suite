@@ -113,6 +113,27 @@ const LG = {
     const tray = String(selectedTray);
     return list.every((p) => p && String(p.trayId) === tray);
   },
+  lookupKey(code, time) {
+    return LG.sanitizeKey(String(code || '') + '_' + String(time || ''));
+  },
+  buildLookupEntry({ code, by, time } = {}) {
+    return {
+      code: String(code || ''),
+      by: String(by || ''),
+      time: String(time || ''),
+      state: 'pending',
+    };
+  },
+  pendingLookups(map) {
+    if (!map || typeof map !== 'object') return [];
+    const out = [];
+    for (const [key, entry] of Object.entries(map)) {
+      if (entry && entry.state === 'pending' && entry.code) {
+        out.push({ key, ...entry });
+      }
+    }
+    return out;
+  },
   sessionResetUrls(base, sessionId) {
     return ['history', 'scans', 'dupes'].map(
       (node) => `${String(base).replace(/\/$/, '')}/opname/${sessionId}/${node}.json`
@@ -4643,6 +4664,39 @@ selectTray(String(remote), label, { fromRemote: true });
 applyingRemoteTray = false;
 }
 }
+const lookupInFlight = new Set();
+async function processLookups() {
+if (!isMulti() || !sessionId) return;
+for (const item of LG.pendingLookups(lookups)) {
+if (lookupInFlight.has(item.key)) continue;
+lookupInFlight.add(item.key);
+try {
+const soldItem = await checkSoldProduct(item.code);
+const hit = LG.classifySoldScan(soldItem);
+const view = describeSoldScan(hit, item.code);
+const nowIso = new Date().toISOString();
+const entry = {
+by: item.by,
+time: nowIso,
+status: view.st.label,
+codeProduct: view.finalCodeProduct,
+code: view.finalCode,
+name: view.finalName,
+tray: view.finalTray,
+image: view.imgUrl,
+};
+const uniqueKey = LG.generateHistoryKey(entry.codeProduct, entry.time);
+await fbPut(`/opname/${sessionId}/history/${uniqueKey}`, entry);
+await fbPut(`/opname/${sessionId}/lookups/${item.key}/state`, 'done');
+} catch (e) {
+} finally {
+lookupInFlight.delete(item.key);
+}
+}
+}
+function onLookupsUpdate() {
+processLookups();
+}
 function getEsState() {
 return { cloudHistory, participants, dupeCount, lastScanAt, catalog, lookups };
 }
@@ -4661,7 +4715,7 @@ onCloudUpdate,
 renderParticipants,
 updateStats,
 onCatalogUpdate,
-onLookupsUpdate() {},
+onLookupsUpdate,
 };
 for (const name of result.effects || []) {
 const fn = effects[name];
