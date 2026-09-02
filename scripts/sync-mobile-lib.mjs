@@ -11,6 +11,7 @@ const files = [
   'lookup-queue.js',
   'scan-cooldown.js',
   'camera-tune.js',
+  'camera-power.js',
   'scan-latest.js',
   'scan-suggest.js',
   'scan-filter.js',

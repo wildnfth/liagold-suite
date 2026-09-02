@@ -17,6 +17,7 @@ import { applyEsPut, applyEsPatch } from './lib/es-event.js';
 import { planEsOnError, ES_CLOSED } from './lib/es-reconnect.js';
 import { randomBase36 } from './lib/random-id.js';
 import { startCamera } from './camera.js';
+import { nextCameraAction, cameraUiState } from './lib/camera-power.js';
 
 const ST = {
   MASUK: 'MASUK',
@@ -83,6 +84,8 @@ try {
 let retryTimer = null;
 let audioCtx = null;
 let camHandle = null;
+let camWantedOn = true;
+let camStartId = 0;
 let lastShownScanTime = '';
 let suggestItems = [];
 let suggestIndex = -1;
@@ -125,6 +128,10 @@ document.addEventListener('click', (e) => {
 });
 trayEl.addEventListener('change', onTrayChange);
 document.getElementById('leave-btn').addEventListener('click', leave);
+document.getElementById('cam-toggle')?.addEventListener('change', (e) => {
+  camWantedOn = Boolean(e.target.checked);
+  applyCameraPower();
+});
 document.querySelector('.tabs')?.addEventListener('click', (e) => {
   const tab = e.target.closest('.scan-tab');
   if (!tab) return;
@@ -321,7 +328,7 @@ async function join() {
     scanScreen.hidden = false;
     listen();
     scheduleRetry();
-    startCam();
+    applyCameraPower();
   } catch (e) {
     joinStatus.textContent = 'Gagal masuk: ' + e.message;
   }
@@ -591,10 +598,10 @@ function pickSuggestion(code) {
 }
 
 function leave() {
-  if (camHandle) {
-    camHandle.stop();
-    camHandle = null;
-  }
+  camWantedOn = true;
+  const toggle = document.getElementById('cam-toggle');
+  if (toggle) toggle.checked = true;
+  stopCam();
   if (es) es.close();
   es = null;
   sessionId = null;
@@ -603,31 +610,68 @@ function leave() {
   scanScreen.hidden = true;
 }
 
+async function applyCameraPower() {
+  const action = nextCameraAction({
+    wantedOn: camWantedOn,
+    running: Boolean(camHandle),
+  });
+  if (action === 'start') await startCam();
+  else if (action === 'stop') stopCam();
+  else applyCameraUi();
+}
+
+function stopCam() {
+  camStartId += 1;
+  if (camHandle) {
+    camHandle.stop();
+    camHandle = null;
+  }
+  applyCameraUi();
+}
+
+function applyCameraUi() {
+  const ui = cameraUiState({
+    wantedOn: camWantedOn,
+    zoomCaps: camHandle && camHandle.zoomCaps,
+  });
+  const wrap = document.querySelector('.cam-wrap');
+  if (wrap) wrap.hidden = ui.previewHidden;
+  const zoomWrap = document.getElementById('zoom-wrap');
+  if (zoomWrap) zoomWrap.hidden = ui.zoomHidden;
+  const camStatus = document.getElementById('cam-status');
+  if (camStatus && !camWantedOn) camStatus.textContent = '';
+}
+
 async function startCam() {
   const videoEl = document.getElementById('cam');
   const camStatus = document.getElementById('cam-status');
-  const zoomWrap = document.getElementById('zoom-wrap');
   const zoomInput = document.getElementById('zoom');
-  camHandle = await startCamera({
+  const id = ++camStartId;
+  const handle = await startCamera({
     videoEl,
     onCode: submitCode,
     onDenied() {
+      if (id !== camStartId) return;
       camStatus.textContent = 'Izinkan kamera, atau ketik kodenya';
     },
   });
-  const caps = camHandle && camHandle.zoomCaps;
-  if (!caps || !zoomWrap || !zoomInput) {
-    if (zoomWrap) zoomWrap.hidden = true;
+  if (id !== camStartId || !camWantedOn) {
+    handle.stop();
+    if (id === camStartId) applyCameraUi();
     return;
   }
-  zoomWrap.hidden = false;
-  zoomInput.min = String(caps.min);
-  zoomInput.max = String(caps.max);
-  zoomInput.step = String(caps.step);
-  zoomInput.value = String(caps.min);
-  zoomInput.oninput = () => {
-    camHandle.setZoom(zoomInput.value);
-  };
+  camHandle = handle;
+  const caps = camHandle && camHandle.zoomCaps;
+  if (caps && zoomInput) {
+    zoomInput.min = String(caps.min);
+    zoomInput.max = String(caps.max);
+    zoomInput.step = String(caps.step);
+    zoomInput.value = String(caps.min);
+    zoomInput.oninput = () => {
+      if (camHandle) camHandle.setZoom(zoomInput.value);
+    };
+  }
+  applyCameraUi();
 }
 
 function signalHit() {

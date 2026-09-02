@@ -65,6 +65,47 @@ button.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line
 }
 #suggest div:last-child { border-bottom: 0; }
 #suggest b { color: #2563eb; }
+.cam-switch {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 8px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.cam-switch input[type="checkbox"] {
+  appearance: none;
+  -webkit-appearance: none;
+  width: 52px;
+  height: 32px;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  border: 0;
+  border-radius: 999px;
+  background: #cbd5e1;
+  position: relative;
+  cursor: pointer;
+}
+.cam-switch input[type="checkbox"]::after {
+  content: '';
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.25);
+  transition: transform 0.15s ease;
+}
+.cam-switch input[type="checkbox"]:checked {
+  background: #2563eb;
+}
+.cam-switch input[type="checkbox"]:checked::after {
+  transform: translateX(20px);
+}
 .cam-wrap {
   position: relative;
 }
