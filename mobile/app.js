@@ -10,7 +10,7 @@ import { lookupKey, buildLookupEntry } from './lib/lookup-queue.js';
 import { shouldAcceptDetectedCode } from './lib/scan-cooldown.js';
 import { pickLatestScan } from './lib/scan-latest.js';
 import { filterCodeSuggestions } from './lib/scan-suggest.js';
-import { filterProductsByScan, scanFilterCounts } from './lib/scan-filter.js';
+import { filterProductsByScan, scanFilterCounts, catalogProductList as productsFromCatalog, productScanCode } from './lib/scan-filter.js';
 import { generateHistoryKey, sanitizeKey } from './lib/history-key.js';
 import { applyEsPut, applyEsPatch } from './lib/es-event.js';
 import { planEsOnError, ES_CLOSED } from './lib/es-reconnect.js';
@@ -119,12 +119,12 @@ document.addEventListener('click', (e) => {
 });
 trayEl.addEventListener('change', onTrayChange);
 document.getElementById('leave-btn').addEventListener('click', leave);
-document.querySelectorAll('.scan-tab').forEach((tab) => {
-  tab.addEventListener('click', () => {
-    scanFilter = tab.dataset.val;
-    document.querySelectorAll('.scan-tab').forEach((t) => t.classList.toggle('on', t === tab));
-    render();
-  });
+document.querySelector('.tabs')?.addEventListener('click', (e) => {
+  const tab = e.target.closest('.scan-tab');
+  if (!tab) return;
+  e.preventDefault();
+  scanFilter = tab.getAttribute('data-val') || 'all';
+  render();
 });
 
 export async function submitCode(raw) {
@@ -418,8 +418,11 @@ function render() {
   statsEl.textContent = `MASUK ${masuk} · katalog ${productCount} · dupes ${esState.dupeCount || 0}`;
   const names = Object.values(esState.participants || {}).map((p) => p && p.nama).filter(Boolean);
   pesertaEl.textContent = names.length ? `Online: ${names.join(', ')}` : 'Online: -';
-  const productList = catalogProductList();
+  const productList = productsFromCatalog(catalog.products);
   const counts = scanFilterCounts({ products: productList, scanned: scannedCodes });
+  document.querySelectorAll('.scan-tab').forEach((t) => {
+    t.classList.toggle('on', t.getAttribute('data-val') === scanFilter);
+  });
   document.querySelectorAll('[data-count]').forEach((el) => {
     el.textContent = String(counts[el.dataset.count] ?? 0);
   });
@@ -429,16 +432,16 @@ function render() {
       scanned: scannedCodes,
       filter: scanFilter,
     });
-    if (!filtered.length) {
+    if (!counts.all) {
+      productsEl.innerHTML = '<li class="empty">Pilih baki untuk memuat</li>';
+    } else if (!filtered.length) {
       const msg = scanFilter === 'unscanned'
         ? 'Semua sudah discan!'
-        : scanFilter === 'scanned'
-          ? 'Belum ada yang discan'
-          : 'Pilih baki untuk memuat';
+        : 'Belum ada yang discan';
       productsEl.innerHTML = `<li class="empty">${msg}</li>`;
     } else {
       productsEl.innerHTML = filtered.map((p) => {
-        const sc = scannedCodes.has(String(p.codeProduct).toLowerCase());
+        const sc = scannedCodes.has(productScanCode(p));
         return `<li class="${sc ? 'done' : ''}">
           <div>
             <div class="code">${esc(p.codeProduct)}</div>
@@ -460,7 +463,7 @@ function render() {
 }
 
 function catalogProductList() {
-  return Object.values((esState.catalog && esState.catalog.products) || {});
+  return productsFromCatalog((esState.catalog && esState.catalog.products) || {});
 }
 
 function updateSuggestions(query) {

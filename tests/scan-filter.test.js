@@ -15,6 +15,14 @@ describe('filterProductsByScan', () => {
     assert.deepEqual(filterProductsByScan({ products, scanned, filter: 'scanned' }).map((p) => p.codeProduct), ['Aaa', 'Ccc']);
     assert.deepEqual(filterProductsByScan({ products, scanned, filter: 'unscanned' }).map((p) => p.codeProduct), ['Bbb']);
   });
+
+  it('treats CodeProduct the same as codeProduct', () => {
+    const rows = [{ CodeProduct: 'Aaa' }, { CodeProduct: 'Bbb' }];
+    assert.deepEqual(
+      filterProductsByScan({ products: rows, scanned, filter: 'scanned' }).map((p) => p.CodeProduct),
+      ['Aaa'],
+    );
+  });
 });
 
 describe('scanFilterCounts', () => {
