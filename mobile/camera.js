@@ -10,7 +10,8 @@ import {
 
 const FORMATS = ['qr_code', 'code_128', 'ean_13', 'code_39'];
 const BOX_HOLD_MS = 180;
-const CODE_GONE_MS = 500;
+const CODE_GONE_MS = 2500;
+const CODE_EMIT_GAP_MS = 2500;
 
 export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
   let stream;
@@ -32,7 +33,7 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
   let busy = false;
   let boxLast = null;
   let boxShown = null;
-  let codeHold = { lockedCode: null, lastSeenAt: null };
+  let codeHold = { lockedCode: null, lastSeenAt: null, lastEmitAt: null };
   const detector = ('BarcodeDetector' in window)
     ? new BarcodeDetector({ formats: FORMATS })
     : null;
@@ -92,8 +93,10 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
       values,
       lockedCode: codeHold.lockedCode,
       lastSeenAt: codeHold.lastSeenAt,
+      lastEmitAt: codeHold.lastEmitAt,
       now,
       goneMs: CODE_GONE_MS,
+      emitGapMs: CODE_EMIT_GAP_MS,
     });
     if (running && codeHold.accept && codeHold.code) onCode(codeHold.code);
   }
@@ -169,7 +172,7 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
       running = false;
       boxLast = null;
       boxShown = null;
-      codeHold = { lockedCode: null, lastSeenAt: null };
+      codeHold = { lockedCode: null, lastSeenAt: null, lastEmitAt: null };
       paintBox(null);
       for (const t of stream.getTracks()) t.stop();
       videoEl.srcObject = null;

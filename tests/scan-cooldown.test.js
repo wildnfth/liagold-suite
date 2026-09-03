@@ -19,6 +19,12 @@ describe('shouldAcceptDetectedCode', () => {
       code: 'BBB', lastCode: 'AAA', lastAt: 1000, now: 1100, cooldownMs: 2000,
     }), true);
   });
+
+  it('treats the same letters in a different case as the same code', () => {
+    assert.equal(shouldAcceptDetectedCode({
+      code: 'lgl750g00006', lastCode: 'LGL750G00006', lastAt: 1000, now: 1500, cooldownMs: 2000,
+    }), false);
+  });
 });
 
 describe('shouldPauseCameraCode', () => {
@@ -55,38 +61,63 @@ describe('shouldPauseCameraCode', () => {
 describe('advanceCameraHold', () => {
   it('emits the first code and then ignores it while it stays in frame', () => {
     const first = advanceCameraHold({ values: ['AAA'], lockedCode: null, now: 1000 });
-    assert.deepEqual(first, { accept: true, code: 'AAA', lockedCode: 'AAA', lastSeenAt: 1000 });
+    assert.equal(first.accept, true);
+    assert.equal(first.code, 'AAA');
+    assert.equal(first.lockedCode, 'aaa');
     const held = advanceCameraHold({
-      values: ['AAA'], lockedCode: first.lockedCode, lastSeenAt: first.lastSeenAt, now: 1100,
+      values: ['AAA'], lockedCode: first.lockedCode, lastSeenAt: first.lastSeenAt, lastEmitAt: first.lastEmitAt, now: 1100,
     });
     assert.equal(held.accept, false);
-    assert.equal(held.lockedCode, 'AAA');
+    assert.equal(held.lockedCode, 'aaa');
   });
 
   it('ignores a second format while the locked code is still in the frame', () => {
     const held = advanceCameraHold({
-      values: ['BBB', 'AAA'], lockedCode: 'AAA', lastSeenAt: 1000, now: 1200,
+      values: ['BBB', 'AAA'], lockedCode: 'aaa', lastSeenAt: 1000, lastEmitAt: 1000, now: 1200,
     });
     assert.equal(held.accept, false);
-    assert.equal(held.lockedCode, 'AAA');
+    assert.equal(held.lockedCode, 'aaa');
+  });
+
+  it('keeps the lock through brief empty detections', () => {
+    const miss = advanceCameraHold({
+      values: [], lockedCode: 'aaa', lastSeenAt: 1000, lastEmitAt: 1000, now: 1400, goneMs: 2500,
+    });
+    assert.equal(miss.accept, false);
+    assert.equal(miss.lockedCode, 'aaa');
+    const back = advanceCameraHold({
+      values: ['AAA'], lockedCode: 'aaa', lastSeenAt: 1000, lastEmitAt: 1000, now: 1500, goneMs: 2500,
+    });
+    assert.equal(back.accept, false);
+    assert.equal(back.lockedCode, 'aaa');
   });
 
   it('does not switch to another code until the locked one has been gone', () => {
     const early = advanceCameraHold({
-      values: ['BBB'], lockedCode: 'AAA', lastSeenAt: 1000, now: 1300, goneMs: 500,
+      values: ['BBB'], lockedCode: 'aaa', lastSeenAt: 1000, lastEmitAt: 1000, now: 2000, goneMs: 2500, emitGapMs: 2500,
     });
     assert.equal(early.accept, false);
-    assert.equal(early.lockedCode, 'AAA');
+    assert.equal(early.lockedCode, 'aaa');
     const next = advanceCameraHold({
-      values: ['BBB'], lockedCode: 'AAA', lastSeenAt: 1000, now: 1600, goneMs: 500,
+      values: ['BBB'], lockedCode: 'aaa', lastSeenAt: 1000, lastEmitAt: 1000, now: 3600, goneMs: 2500, emitGapMs: 2500,
     });
-    assert.deepEqual(next, { accept: true, code: 'BBB', lockedCode: 'BBB', lastSeenAt: 1600 });
+    assert.equal(next.accept, true);
+    assert.equal(next.code, 'BBB');
+    assert.equal(next.lockedCode, 'bbb');
   });
 
-  it('unlocks without emitting after the locked code leaves an empty frame', () => {
+  it('unlocks without emitting after a long empty gap', () => {
     const gone = advanceCameraHold({
-      values: [], lockedCode: 'AAA', lastSeenAt: 1000, now: 1600, goneMs: 500,
+      values: [], lockedCode: 'aaa', lastSeenAt: 1000, lastEmitAt: 1000, now: 3600, goneMs: 2500,
     });
-    assert.deepEqual(gone, { accept: false, code: null, lockedCode: null, lastSeenAt: null });
+    assert.equal(gone.accept, false);
+    assert.equal(gone.lockedCode, null);
+  });
+
+  it('blocks every code during the emit gap even after unlock', () => {
+    const blocked = advanceCameraHold({
+      values: ['BBB'], lockedCode: null, lastSeenAt: null, lastEmitAt: 1000, now: 2000, emitGapMs: 2500,
+    });
+    assert.equal(blocked.accept, false);
   });
 });
