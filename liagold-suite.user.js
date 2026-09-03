@@ -956,6 +956,19 @@ const LG = {
     scored.sort((a, b) => a.rank - b.rank || a.code.localeCompare(b.code));
     return scored.slice(0, lim).map(({ code, name, weight }) => ({ code, name, weight }));
   },
+  highlightSuggestionMatch({ code, query } = {}) {
+    const text = String(code ?? '');
+    if (!text) return [];
+    const q = String(query || '').trim().toLowerCase();
+    if (q.length < 2) return [{ text, match: false }];
+    const idx = text.toLowerCase().indexOf(q);
+    if (idx < 0) return [{ text, match: false }];
+    const out = [];
+    if (idx > 0) out.push({ text: text.slice(0, idx), match: false });
+    out.push({ text: text.slice(idx, idx + q.length), match: true });
+    if (idx + q.length < text.length) out.push({ text: text.slice(idx + q.length), match: false });
+    return out;
+  },
   nextSuggestionScrollTop({
     scrollTop,
     viewHeight,
@@ -6332,8 +6345,9 @@ box.innerHTML = suggestItems.map((item, i) => {
 const on = i === suggestIndex;
 const w = Number(item.weight);
 const wTxt = Number.isFinite(w) && w > 0 ? `${w} gr` : '';
+const codeHtml = LG.highlightSuggestionMatch({ code: item.code, query }).map((seg) => seg.match ? `<mark>${esc(seg.text)}</mark>` : esc(seg.text)).join('');
 return `<div class="lg-suggest-opt" data-idx="${i}" style="display:flex;align-items:baseline;gap:8px;padding:8px 10px;cursor:pointer;background:${on ? '#eff6ff' : '#fff'};border-bottom:1px solid #f1f5f9;">
-<span style="font-family:ui-monospace,monospace;font-weight:700;font-size:12px;color:#1e293b;white-space:nowrap;">${esc(item.code)}</span>
+<span style="font-family:ui-monospace,monospace;font-weight:700;font-size:12px;color:#1e293b;white-space:nowrap;">${codeHtml}</span>
 <span style="flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:#1e293b;">${esc(item.name)}</span>
 <span style="font-size:12px;font-weight:700;color:#2563eb;white-space:nowrap;">${esc(wTxt)}</span>
 </div>`;

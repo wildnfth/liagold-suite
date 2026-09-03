@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
   truncateSuggestionName,
   filterCodeSuggestions,
+  highlightSuggestionMatch,
   nextSuggestionScrollTop,
 } from '../lib/scan-suggest.js';
 
@@ -50,6 +51,32 @@ describe('filterCodeSuggestions', () => {
 
   it('returns nothing until two characters are typed', () => {
     assert.deepEqual(filterCodeSuggestions({ query: 'G', products }), []);
+  });
+});
+
+describe('highlightSuggestionMatch', () => {
+  it('splits the matched substring out of the code', () => {
+    assert.deepEqual(highlightSuggestionMatch({ code: 'GLP75001A', query: 'glp' }), [
+      { text: 'GLP', match: true },
+      { text: '75001A', match: false },
+    ]);
+  });
+
+  it('highlights a middle or ending match and keeps original case', () => {
+    assert.deepEqual(highlightSuggestionMatch({ code: 'GB37504MX', query: '04mx' }), [
+      { text: 'GB375', match: false },
+      { text: '04MX', match: true },
+    ]);
+  });
+
+  it('returns the whole code unmatched when the query is too short or absent', () => {
+    assert.deepEqual(highlightSuggestionMatch({ code: 'GLP75001A', query: 'G' }), [
+      { text: 'GLP75001A', match: false },
+    ]);
+    assert.deepEqual(highlightSuggestionMatch({ code: 'GLP75001A', query: 'zzz' }), [
+      { text: 'GLP75001A', match: false },
+    ]);
+    assert.deepEqual(highlightSuggestionMatch({ code: '', query: 'glp' }), []);
   });
 });
 

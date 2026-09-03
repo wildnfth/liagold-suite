@@ -9,7 +9,7 @@ import {
 import { lookupKey, buildLookupEntry } from './lib/lookup-queue.js';
 import { shouldAcceptDetectedCode } from './lib/scan-cooldown.js';
 import { pickLatestScan } from './lib/scan-latest.js';
-import { filterCodeSuggestions } from './lib/scan-suggest.js';
+import { filterCodeSuggestions, highlightSuggestionMatch } from './lib/scan-suggest.js';
 import { filterProductsByScan, scanFilterCounts, catalogProductList as productsFromCatalog, productScanCode } from './lib/scan-filter.js';
 import { scanStatCards, filterHistoryByStatus, nextStatusFilter } from './lib/scan-stats.js';
 import { photoOverlayView, productPhotoAttrs } from './lib/photo-overlay.js';
@@ -626,9 +626,10 @@ function updateSuggestions(query) {
     return;
   }
   suggestEl.hidden = false;
-  suggestEl.innerHTML = suggestItems.map((item, i) => (
-    `<div data-idx="${i}"><b>${esc(item.code)}</b> <span>${esc(item.name || '')}</span></div>`
-  )).join('');
+  suggestEl.innerHTML = suggestItems.map((item, i) => {
+    const codeHtml = highlightSuggestionMatch({ code: item.code, query }).map((seg) => seg.match ? `<mark>${esc(seg.text)}</mark>` : esc(seg.text)).join('');
+    return `<div data-idx="${i}"><span class="code">${codeHtml}</span> <span>${esc(item.name || '')}</span></div>`;
+  }).join('');
   suggestEl.querySelectorAll('div').forEach((opt) => {
     opt.addEventListener('click', () => {
       const item = suggestItems[Number(opt.dataset.idx)];

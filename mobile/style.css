@@ -65,7 +65,8 @@ button.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line
   font-size: 14px;
 }
 #suggest div:last-child { border-bottom: 0; }
-#suggest b { color: #2563eb; }
+#suggest .code { font-weight: 700; }
+#suggest mark { background: #fef08a; border-radius: 3px; padding: 0 1px; color: inherit; }
 .cam-switch {
   display: flex;
   align-items: center;
