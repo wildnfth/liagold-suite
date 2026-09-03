@@ -7,7 +7,7 @@ import {
   productCatalogKey,
 } from './lib/catalog-sync.js';
 import { lookupKey, buildLookupEntry } from './lib/lookup-queue.js';
-import { shouldAcceptDetectedCode } from './lib/scan-cooldown.js';
+import { shouldAcceptDetectedCode, shouldPauseCameraCode } from './lib/scan-cooldown.js';
 import { pickLatestScan } from './lib/scan-latest.js';
 import { filterCodeSuggestions, highlightSuggestionMatch } from './lib/scan-suggest.js';
 import { filterProductsByScan, scanFilterCounts, catalogProductList as productsFromCatalog, productScanCode } from './lib/scan-filter.js';
@@ -28,7 +28,6 @@ const ST = {
   TIDAK_ADA: 'BARCODE TIDAK ADA',
 };
 const PENDING_KEY = 'lg_pendingCloudPushes';
-const CAMERA_PAUSE_MS = 3000;
 const BLOCK_MSG = {
   'host-stale': 'Laptop tidak kirim katalog',
   'no-tray': 'Pilih baki spesifik terlebih dahulu sebelum scan!',
@@ -74,7 +73,7 @@ let scannedCodes = new Set();
 let pendingLocalScans = new Set();
 let lastCode = null;
 let lastAt = 0;
-let camPauseUntil = 0;
+let camLockedCode = null;
 let trayChangedAt = 0;
 let lookupWait = null;
 let pendingPushes = [];
@@ -210,7 +209,7 @@ export async function submitCode(raw, opts) {
   if (!shouldAcceptDetectedCode({ code, lastCode, lastAt, now })) return;
   lastCode = code;
   lastAt = now;
-  if (opts && opts.fromCamera) camPauseUntil = now + CAMERA_PAUSE_MS;
+  if (opts && opts.fromCamera) camLockedCode = code;
   signalHit();
 
   const found = findProduct(products, code);
@@ -723,7 +722,9 @@ async function startCam() {
     videoEl,
     overlayEl: document.getElementById('cam-box-poly'),
     onCode: (code) => {
-      if (Date.now() < camPauseUntil) return;
+      const gate = shouldPauseCameraCode({ code, lockedCode: camLockedCode, now: Date.now() });
+      if (gate.clearLock) camLockedCode = null;
+      if (!gate.accept) return;
       submitCode(code, { fromCamera: true });
     },
     onDenied() {
