@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { shouldAcceptDetectedCode, shouldPauseCameraCode } from '../lib/scan-cooldown.js';
+import { shouldAcceptDetectedCode, shouldPauseCameraCode, advanceCameraHold } from '../lib/scan-cooldown.js';
 
 describe('shouldAcceptDetectedCode', () => {
   it('rejects empty and accepts the first code', () => {
@@ -49,5 +49,44 @@ describe('shouldPauseCameraCode', () => {
     assert.deepEqual(shouldPauseCameraCode({
       code: 'BBB', lockedCode: 'AAA', now: 99999,
     }), { accept: true, clearLock: true });
+  });
+});
+
+describe('advanceCameraHold', () => {
+  it('emits the first code and then ignores it while it stays in frame', () => {
+    const first = advanceCameraHold({ values: ['AAA'], lockedCode: null, now: 1000 });
+    assert.deepEqual(first, { accept: true, code: 'AAA', lockedCode: 'AAA', lastSeenAt: 1000 });
+    const held = advanceCameraHold({
+      values: ['AAA'], lockedCode: first.lockedCode, lastSeenAt: first.lastSeenAt, now: 1100,
+    });
+    assert.equal(held.accept, false);
+    assert.equal(held.lockedCode, 'AAA');
+  });
+
+  it('ignores a second format while the locked code is still in the frame', () => {
+    const held = advanceCameraHold({
+      values: ['BBB', 'AAA'], lockedCode: 'AAA', lastSeenAt: 1000, now: 1200,
+    });
+    assert.equal(held.accept, false);
+    assert.equal(held.lockedCode, 'AAA');
+  });
+
+  it('does not switch to another code until the locked one has been gone', () => {
+    const early = advanceCameraHold({
+      values: ['BBB'], lockedCode: 'AAA', lastSeenAt: 1000, now: 1300, goneMs: 500,
+    });
+    assert.equal(early.accept, false);
+    assert.equal(early.lockedCode, 'AAA');
+    const next = advanceCameraHold({
+      values: ['BBB'], lockedCode: 'AAA', lastSeenAt: 1000, now: 1600, goneMs: 500,
+    });
+    assert.deepEqual(next, { accept: true, code: 'BBB', lockedCode: 'BBB', lastSeenAt: 1600 });
+  });
+
+  it('unlocks without emitting after the locked code leaves an empty frame', () => {
+    const gone = advanceCameraHold({
+      values: [], lockedCode: 'AAA', lastSeenAt: 1000, now: 1600, goneMs: 500,
+    });
+    assert.deepEqual(gone, { accept: false, code: null, lockedCode: null, lastSeenAt: null });
   });
 });

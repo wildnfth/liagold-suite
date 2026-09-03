@@ -18,6 +18,44 @@ export function shouldPauseCameraCode({
   return { accept: true };
 }
 
+export function advanceCameraHold({
+  values,
+  lockedCode,
+  lastSeenAt,
+  now,
+  goneMs = 500,
+} = {}) {
+  const list = [];
+  for (const v of Array.isArray(values) ? values : []) {
+    const s = String(v || '').trim();
+    if (s) list.push(s);
+  }
+  const n = Number(now);
+  const gone = Number(goneMs) || 500;
+  const locked = lockedCode == null || lockedCode === '' ? '' : String(lockedCode);
+
+  if (locked) {
+    if (list.includes(locked)) {
+      return { accept: false, code: null, lockedCode: locked, lastSeenAt: n };
+    }
+    const seen = Number(lastSeenAt);
+    if (Number.isFinite(seen) && Number.isFinite(n) && (n - seen) < gone) {
+      return { accept: false, code: null, lockedCode: locked, lastSeenAt: seen };
+    }
+    if (!list.length) {
+      return { accept: false, code: null, lockedCode: null, lastSeenAt: null };
+    }
+    const next = list[0];
+    return { accept: true, code: next, lockedCode: next, lastSeenAt: n };
+  }
+
+  if (!list.length) {
+    return { accept: false, code: null, lockedCode: null, lastSeenAt: null };
+  }
+  const next = list[0];
+  return { accept: true, code: next, lockedCode: next, lastSeenAt: n };
+}
+
 export function shouldAcceptDetectedCode({
   code,
   lastCode,

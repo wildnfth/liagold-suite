@@ -1,4 +1,5 @@
 import { fitJsQrFrame, clampZoom, readZoomCaps } from './lib/camera-tune.js';
+import { advanceCameraHold } from './lib/scan-cooldown.js';
 import {
   cornersFromDetect,
   holdQrBox,
@@ -9,6 +10,7 @@ import {
 
 const FORMATS = ['qr_code', 'code_128', 'ean_13', 'code_39'];
 const BOX_HOLD_MS = 180;
+const CODE_GONE_MS = 500;
 
 export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
   let stream;
@@ -30,6 +32,7 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
   let busy = false;
   let boxLast = null;
   let boxShown = null;
+  let codeHold = { lockedCode: null, lastSeenAt: null };
   const detector = ('BarcodeDetector' in window)
     ? new BarcodeDetector({ formats: FORMATS })
     : null;
@@ -84,6 +87,17 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
     paintBox(boxShown);
   }
 
+  function emitCodes(values, now) {
+    codeHold = advanceCameraHold({
+      values,
+      lockedCode: codeHold.lockedCode,
+      lastSeenAt: codeHold.lastSeenAt,
+      now,
+      goneMs: CODE_GONE_MS,
+    });
+    if (running && codeHold.accept && codeHold.code) onCode(codeHold.code);
+  }
+
   async function tick() {
     if (!running) return;
     if (document.hidden || busy) {
@@ -95,8 +109,9 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
       if (detector) {
         const codes = await detector.detect(videoEl);
         const hit = codes[0];
-        trackBox(cornersFromDetect(hit), performance.now());
-        if (running && hit && hit.rawValue) onCode(hit.rawValue);
+        const now = performance.now();
+        trackBox(cornersFromDetect(hit), now);
+        emitCodes((codes || []).map((c) => c && c.rawValue), now);
       } else if (window.jsQR && videoEl.readyState >= 2) {
         const srcW = videoEl.videoWidth;
         const srcH = videoEl.videoHeight;
@@ -124,13 +139,18 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
               : null;
           }
         }
-        trackBox(corners, performance.now());
-        if (running && data) onCode(data);
+        const now = performance.now();
+        trackBox(corners, now);
+        emitCodes(data ? [data] : [], now);
       } else {
-        trackBox(null, performance.now());
+        const now = performance.now();
+        trackBox(null, now);
+        emitCodes([], now);
       }
     } catch (e) {
-      trackBox(null, performance.now());
+      const now = performance.now();
+      trackBox(null, now);
+      emitCodes([], now);
     }
     busy = false;
     if (running) requestAnimationFrame(tick);
@@ -149,6 +169,7 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
       running = false;
       boxLast = null;
       boxShown = null;
+      codeHold = { lockedCode: null, lastSeenAt: null };
       paintBox(null);
       for (const t of stream.getTracks()) t.stop();
       videoEl.srcObject = null;

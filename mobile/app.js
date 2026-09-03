@@ -725,6 +725,7 @@ async function startCam() {
       const gate = shouldPauseCameraCode({ code, lockedCode: camLockedCode, now: Date.now() });
       if (gate.clearLock) camLockedCode = null;
       if (!gate.accept) return;
+      camLockedCode = String(code || '').trim();
       submitCode(code, { fromCamera: true });
     },
     onDenied() {
