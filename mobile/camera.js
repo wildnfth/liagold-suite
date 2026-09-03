@@ -2,8 +2,9 @@ import { fitJsQrFrame, clampZoom, readZoomCaps } from './lib/camera-tune.js';
 import {
   cornersFromDetect,
   holdQrBox,
-  overlayPoints,
+  mapCoverPoint,
   scaleFramePoint,
+  smoothQrCorners,
 } from './lib/qr-overlay.js';
 
 const FORMATS = ['qr_code', 'code_128', 'ean_13', 'code_39'];
@@ -28,6 +29,7 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
   let running = true;
   let busy = false;
   let boxLast = null;
+  let boxShown = null;
   const detector = ('BarcodeDetector' in window)
     ? new BarcodeDetector({ formats: FORMATS })
     : null;
@@ -37,27 +39,49 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
 
   function paintBox(corners) {
     if (!overlayEl) return;
-    const svg = overlayEl.tagName === 'polygon' ? overlayEl.ownerSVGElement : overlayEl;
-    const poly = overlayEl.tagName === 'polygon' ? overlayEl : overlayEl.querySelector('polygon');
+    const svg = overlayEl.tagName === 'polygon' || overlayEl.tagName === 'POLYGON'
+      ? overlayEl.ownerSVGElement
+      : overlayEl;
+    const poly = overlayEl.tagName === 'polygon' || overlayEl.tagName === 'POLYGON'
+      ? overlayEl
+      : overlayEl.querySelector('polygon');
     const viewW = videoEl.clientWidth;
     const viewH = videoEl.clientHeight;
     if (svg) {
       svg.setAttribute('viewBox', `0 0 ${viewW} ${viewH}`);
     }
     if (!poly) return;
-    poly.setAttribute('points', corners
-      ? overlayPoints(corners, {
-        videoW: videoEl.videoWidth,
-        videoH: videoEl.videoHeight,
-        viewW,
-        viewH,
-      })
+    poly.setAttribute('points', corners && corners.length
+      ? corners.map((p) => `${Number(p.x).toFixed(1)},${Number(p.y).toFixed(1)}`).join(' ')
       : '');
+  }
+
+  function viewCorners(corners) {
+    if (!corners) return null;
+    const videoW = videoEl.videoWidth;
+    const videoH = videoEl.videoHeight;
+    const viewW = videoEl.clientWidth;
+    const viewH = videoEl.clientHeight;
+    return corners.map((c) => mapCoverPoint({
+      x: c.x,
+      y: c.y,
+      videoW,
+      videoH,
+      viewW,
+      viewH,
+    }));
   }
 
   function trackBox(corners, now) {
     boxLast = holdQrBox({ now, corners, last: boxLast, holdMs: BOX_HOLD_MS });
-    paintBox(boxLast && boxLast.corners);
+    const next = boxLast ? viewCorners(boxLast.corners) : null;
+    boxShown = smoothQrCorners({
+      prev: boxShown,
+      next,
+      alpha: 0.85,
+      deadzone: 8,
+    });
+    paintBox(boxShown);
   }
 
   async function tick() {
@@ -124,6 +148,7 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
     stop() {
       running = false;
       boxLast = null;
+      boxShown = null;
       paintBox(null);
       for (const t of stream.getTracks()) t.stop();
       videoEl.srcObject = null;

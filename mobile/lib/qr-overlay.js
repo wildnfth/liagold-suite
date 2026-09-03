@@ -85,3 +85,43 @@ export function overlayPoints(corners, view = {}) {
     return `${p.x.toFixed(1)},${p.y.toFixed(1)}`;
   }).join(' ');
 }
+
+export function matchCorners(prev, next) {
+  if (!next || !next.length) return null;
+  if (!prev || prev.length !== next.length) return next;
+  const used = new Set();
+  return prev.map((p) => {
+    let bestI = -1;
+    let bestD = Infinity;
+    for (let i = 0; i < next.length; i++) {
+      if (used.has(i)) continue;
+      const dx = next[i].x - p.x;
+      const dy = next[i].y - p.y;
+      const d = dx * dx + dy * dy;
+      if (d < bestD) {
+        bestD = d;
+        bestI = i;
+      }
+    }
+    used.add(bestI);
+    return next[bestI];
+  });
+}
+
+export function smoothQrCorners({ prev, next, alpha = 0.82, deadzone = 7 } = {}) {
+  if (!next || next.length < 4) return prev || null;
+  if (!prev || prev.length !== next.length) return next;
+  const aligned = matchCorners(prev, next);
+  const dz2 = Number(deadzone) * Number(deadzone);
+  const a = Number(alpha);
+  return prev.map((p, i) => {
+    const n = aligned[i];
+    const dx = n.x - p.x;
+    const dy = n.y - p.y;
+    if (dx * dx + dy * dy <= dz2) return p;
+    return {
+      x: p.x * a + n.x * (1 - a),
+      y: p.y * a + n.y * (1 - a),
+    };
+  });
+}

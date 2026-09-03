@@ -6,6 +6,8 @@ import {
   cornersFromDetect,
   holdQrBox,
   overlayPoints,
+  matchCorners,
+  smoothQrCorners,
 } from '../lib/qr-overlay.js';
 
 describe('mapCoverPoint', () => {
@@ -110,3 +112,44 @@ describe('overlayPoints', () => {
     assert.equal(pts, '0.0,0.0 50.0,0.0 50.0,50.0 0.0,50.0');
   });
 });
+
+describe('matchCorners', () => {
+  it('reorders the next quad to the previous corner order', () => {
+    const prev = [
+      { x: 0, y: 0 },
+      { x: 10, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    const next = [
+      { x: 10, y: 0 },
+      { x: 0, y: 0 },
+      { x: 10, y: 10 },
+      { x: 0, y: 10 },
+    ];
+    assert.deepEqual(matchCorners(prev, next), prev);
+  });
+});
+
+describe('smoothQrCorners', () => {
+  const prev = [
+    { x: 0, y: 0 },
+    { x: 100, y: 0 },
+    { x: 100, y: 100 },
+    { x: 0, y: 100 },
+  ];
+
+  it('ignores sub-deadzone jitter', () => {
+    const jitter = prev.map((p) => ({ x: p.x + 2, y: p.y + 1 }));
+    assert.deepEqual(smoothQrCorners({ prev, next: jitter, deadzone: 5 }), prev);
+  });
+
+  it('eases toward a real move instead of snapping', () => {
+    const moved = prev.map((p) => ({ x: p.x + 40, y: p.y }));
+    const out = smoothQrCorners({ prev, next: moved, alpha: 0.75, deadzone: 5 });
+    assert.equal(out[0].x, 10);
+    assert.equal(out[0].y, 0);
+    assert.equal(out[1].x, 110);
+  });
+});
+
