@@ -28,6 +28,7 @@ const ST = {
   TIDAK_ADA: 'BARCODE TIDAK ADA',
 };
 const PENDING_KEY = 'lg_pendingCloudPushes';
+const CAMERA_PAUSE_MS = 3000;
 const BLOCK_MSG = {
   'host-stale': 'Laptop tidak kirim katalog',
   'no-tray': 'Pilih baki spesifik terlebih dahulu sebelum scan!',
@@ -73,6 +74,7 @@ let scannedCodes = new Set();
 let pendingLocalScans = new Set();
 let lastCode = null;
 let lastAt = 0;
+let camPauseUntil = 0;
 let trayChangedAt = 0;
 let lookupWait = null;
 let pendingPushes = [];
@@ -177,7 +179,7 @@ photoFill?.addEventListener('click', () => {
   scanInput.focus();
 });
 
-export async function submitCode(raw) {
+export async function submitCode(raw, opts) {
   hideSuggestions();
   const code = String(raw || '').trim();
   if (!code) return;
@@ -208,6 +210,7 @@ export async function submitCode(raw) {
   if (!shouldAcceptDetectedCode({ code, lastCode, lastAt, now })) return;
   lastCode = code;
   lastAt = now;
+  if (opts && opts.fromCamera) camPauseUntil = now + CAMERA_PAUSE_MS;
   signalHit();
 
   const found = findProduct(products, code);
@@ -719,7 +722,10 @@ async function startCam() {
   const handle = await startCamera({
     videoEl,
     overlayEl: document.getElementById('cam-box-poly'),
-    onCode: submitCode,
+    onCode: (code) => {
+      if (Date.now() < camPauseUntil) return;
+      submitCode(code, { fromCamera: true });
+    },
     onDenied() {
       if (id !== camStartId) return;
       camStatus.textContent = 'Izinkan kamera, atau ketik kodenya';
