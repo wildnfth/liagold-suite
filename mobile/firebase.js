@@ -22,6 +22,13 @@ export async function fbPost(path, data) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
+export async function fbDelete(path) {
+  const res = await fetch(`${FIREBASE}${path}.json`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
 export function openSessionEs(sessionId, { onPut, onPatch, onError }) {
   const es = new EventSource(`${FIREBASE}/opname/${sessionId}.json`);
   es.addEventListener('put', (e) => {

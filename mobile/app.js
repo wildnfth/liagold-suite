@@ -1,4 +1,4 @@
-import { fbGet, fbPut, fbPost, openSessionEs } from './firebase.js';
+import { fbGet, fbPut, fbPost, fbDelete, openSessionEs } from './firebase.js';
 import { shouldRejectExpiredJoin } from './lib/session-expiry.js';
 import { classifyFoundScan } from './lib/scan-classify.js';
 import {
@@ -669,6 +669,9 @@ function leave() {
   stopCam();
   if (es) es.close();
   es = null;
+  if (sessionId && myId) {
+    fbDelete(`/opname/${sessionId}/peserta/${myId}`).catch(() => {});
+  }
   sessionId = null;
   try { localStorage.removeItem('lg_session'); } catch (e) {}
   joinScreen.hidden = false;
