@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.0
-// @description  v2.2.0: purchasing payment method totals
+// @version      2.2.1
+// @description  v2.2.1: parse 389,000 as thousands, not 389
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -434,7 +434,10 @@ const LG = {
     return frac === 3 ? raw.replace('.', '') : raw;
   },
   applyCommasOnly(raw, commaCount) {
-    return commaCount > 1 ? raw.replace(/,/g, '') : raw.replace(',', '.');
+    if (commaCount > 1) return raw.replace(/,/g, '');
+    const lastComma = raw.lastIndexOf(',');
+    const frac = raw.length - lastComma - 1;
+    return frac === 3 ? raw.replace(',', '') : raw.replace(',', '.');
   },
   normalizeIdNumberRaw(raw) {
     const lastComma = raw.lastIndexOf(',');
