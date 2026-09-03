@@ -649,6 +649,7 @@ async function startCam() {
   const id = ++camStartId;
   const handle = await startCamera({
     videoEl,
+    overlayEl: document.getElementById('cam-box-poly'),
     onCode: submitCode,
     onDenied() {
       if (id !== camStartId) return;

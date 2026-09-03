@@ -12,6 +12,7 @@ const files = [
   'scan-cooldown.js',
   'camera-tune.js',
   'camera-power.js',
+  'qr-overlay.js',
   'scan-latest.js',
   'scan-suggest.js',
   'scan-filter.js',

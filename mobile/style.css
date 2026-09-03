@@ -110,6 +110,20 @@ button.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line
 .cam-wrap {
   position: relative;
 }
+.cam-box {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  overflow: visible;
+}
+.cam-box polygon {
+  fill: rgba(34, 197, 94, 0.18);
+  stroke: #22c55e;
+  stroke-width: 3;
+  stroke-linejoin: round;
+}
 #cam {
   width: 100%;
   height: 40vh;
