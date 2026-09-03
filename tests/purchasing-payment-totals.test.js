@@ -36,6 +36,22 @@ describe('aggregatePurchasingPayments', () => {
     ]);
     assert.equal(result.total, 2905000);
   });
+
+  it('treats parenthesized and negative CashBanks as money out, not a cancel', () => {
+    const result = aggregatePurchasingPayments([
+      { CashBanks: 'TUN - (389.000)<br> ' },
+      { CashBanks: 'TF BCA - (9.767.000)<br> ' },
+      { PaymentMethodName: 'CASH', TotalPurchase: -1245000, CashBanks: '' },
+    ]);
+
+    assert.equal(result.count, 3);
+    assert.deepEqual(result.methods, [
+      { method: 'TF BCA', label: 'TF BCA', amount: 9767000 },
+      { method: 'CASH', label: 'CASH', amount: 1245000 },
+      { method: 'TUN', label: 'Tunai', amount: 389000 },
+    ]);
+    assert.equal(result.total, 9767000 + 1245000 + 389000);
+  });
 });
 
 describe('purchasing list helpers', () => {

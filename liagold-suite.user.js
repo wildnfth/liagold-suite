@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.1
-// @description  v2.2.1: parse 389,000 as thousands, not 389
+// @version      2.2.2
+// @description  v2.2.2: purchasing method totals ignore parentheses/minus
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -1155,10 +1155,12 @@ const LG = {
   },
   purchasingPaymentLines(item) {
     const fromCash = LG.parseSalesCashBanks(item && item.CashBanks);
-    if (fromCash.length) return fromCash;
+    if (fromCash.length) {
+      return fromCash.map((line) => ({ method: line.method, amount: Math.abs(line.amount) }));
+    }
     const method = String((item && (item.PaymentMethodName || item.PaymentMethod)) || '').trim();
     if (!method) return [];
-    return [{ method, amount: LG.parseIdNumber(item && item.TotalPurchase) }];
+    return [{ method, amount: Math.abs(LG.parseIdNumber(item && item.TotalPurchase)) }];
   },
   aggregatePurchasingPayments(items) {
     const list = Array.isArray(items) ? items : [];
