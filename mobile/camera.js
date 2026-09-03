@@ -8,7 +8,7 @@ import {
 } from './lib/qr-overlay.js';
 
 const FORMATS = ['qr_code', 'code_128', 'ean_13', 'code_39'];
-const BOX_HOLD_MS = 800;
+const BOX_HOLD_MS = 180;
 
 export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
   let stream;

@@ -56,6 +56,18 @@ describe('cornersFromDetect', () => {
     ]);
   });
 
+  it('orders a TL/TR/BL/BR detector list into a non-crossing ring', () => {
+    const out = cornersFromDetect({
+      cornerPoints: [
+        { x: 0, y: 0 },
+        { x: 10, y: 0 },
+        { x: 0, y: 10 },
+        { x: 10, y: 10 },
+      ],
+    });
+    assert.equal(isBowtie(out), false);
+  });
+
   it('falls back to boundingBox, then jsQR location', () => {
     assert.deepEqual(cornersFromDetect({
       boundingBox: { x: 10, y: 20, width: 30, height: 40 },
@@ -151,5 +163,27 @@ describe('smoothQrCorners', () => {
     assert.equal(out[0].y, 0);
     assert.equal(out[1].x, 110);
   });
+
+  it('clears the box when detection is gone', () => {
+    assert.equal(smoothQrCorners({ prev, next: null }), null);
+  });
 });
+
+function orient(a, b, c) {
+  return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+}
+
+function segsIntersect(a, b, c, d) {
+  const o1 = orient(a, b, c);
+  const o2 = orient(a, b, d);
+  const o3 = orient(c, d, a);
+  const o4 = orient(c, d, b);
+  return o1 * o2 < 0 && o3 * o4 < 0;
+}
+
+function isBowtie(pts) {
+  if (!pts || pts.length !== 4) return true;
+  return segsIntersect(pts[0], pts[1], pts[2], pts[3])
+    || segsIntersect(pts[1], pts[2], pts[3], pts[0]);
+}
 
