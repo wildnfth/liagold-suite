@@ -1,19 +1,18 @@
 import { fitJsQrFrame, clampZoom, readZoomCaps } from './lib/camera-tune.js';
-import { advanceCameraHold } from './lib/scan-cooldown.js';
 import {
   cornersFromDetect,
   holdQrBox,
   mapCoverPoint,
   scaleFramePoint,
   smoothQrCorners,
+  pickPrimaryDetect,
+  quadCentroid,
 } from './lib/qr-overlay.js';
 
 const FORMATS = ['qr_code', 'code_128', 'ean_13', 'code_39'];
 const BOX_HOLD_MS = 180;
-const CODE_GONE_MS = 2500;
-const CODE_EMIT_GAP_MS = 2500;
 
-export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
+export async function startCamera({ videoEl, overlayEl, labelEl, onCode, onDenied }) {
   let stream;
   try {
     stream = await navigator.mediaDevices.getUserMedia({
@@ -33,7 +32,7 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
   let busy = false;
   let boxLast = null;
   let boxShown = null;
-  let codeHold = { lockedCode: null, lastSeenAt: null, lastEmitAt: null };
+  let liveCode = '';
   const detector = ('BarcodeDetector' in window)
     ? new BarcodeDetector({ formats: FORMATS })
     : null;
@@ -41,11 +40,16 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const zoomCaps = readZoomCaps(typeof track.getCapabilities === 'function' ? track.getCapabilities() : {});
 
-  function paintBox(corners) {
-    if (!overlayEl) return;
-    const svg = overlayEl.tagName === 'polygon' || overlayEl.tagName === 'POLYGON'
+  function overlaySvg() {
+    if (!overlayEl) return null;
+    return overlayEl.tagName === 'polygon' || overlayEl.tagName === 'POLYGON'
       ? overlayEl.ownerSVGElement
       : overlayEl;
+  }
+
+  function paintBox(corners) {
+    if (!overlayEl) return;
+    const svg = overlaySvg();
     const poly = overlayEl.tagName === 'polygon' || overlayEl.tagName === 'POLYGON'
       ? overlayEl
       : overlayEl.querySelector('polygon');
@@ -53,11 +57,26 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
     const viewH = videoEl.clientHeight;
     if (svg) {
       svg.setAttribute('viewBox', `0 0 ${viewW} ${viewH}`);
+      svg.classList.toggle('has-hit', Boolean(corners && corners.length));
     }
     if (!poly) return;
     poly.setAttribute('points', corners && corners.length
       ? corners.map((p) => `${Number(p.x).toFixed(1)},${Number(p.y).toFixed(1)}`).join(' ')
       : '');
+  }
+
+  function paintLabel(code, corners) {
+    if (!labelEl) return;
+    if (!code || !corners || !corners.length) {
+      labelEl.hidden = true;
+      labelEl.textContent = '';
+      return;
+    }
+    const c = quadCentroid(corners);
+    labelEl.hidden = false;
+    labelEl.textContent = code;
+    labelEl.style.left = `${c.x}px`;
+    labelEl.style.top = `${c.y}px`;
   }
 
   function viewCorners(corners) {
@@ -76,8 +95,11 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
     }));
   }
 
-  function trackBox(corners, now) {
+  function trackTarget(picked, now) {
+    const corners = picked && picked.corners;
     boxLast = holdQrBox({ now, corners, last: boxLast, holdMs: BOX_HOLD_MS });
+    if (picked && picked.code) liveCode = picked.code;
+    else if (!boxLast) liveCode = '';
     const next = boxLast ? viewCorners(boxLast.corners) : null;
     boxShown = smoothQrCorners({
       prev: boxShown,
@@ -86,20 +108,18 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
       deadzone: 8,
     });
     paintBox(boxShown);
+    paintLabel(liveCode, boxShown);
   }
 
-  function emitCodes(values, now) {
-    codeHold = advanceCameraHold({
-      values,
-      lockedCode: codeHold.lockedCode,
-      lastSeenAt: codeHold.lastSeenAt,
-      lastEmitAt: codeHold.lastEmitAt,
-      now,
-      goneMs: CODE_GONE_MS,
-      emitGapMs: CODE_EMIT_GAP_MS,
-    });
-    if (running && codeHold.accept && codeHold.code) onCode(codeHold.code);
+  function tap(e) {
+    if (e) e.preventDefault();
+    const code = liveCode;
+    if (running && code) onCode(code);
   }
+
+  if (labelEl) labelEl.addEventListener('click', tap);
+  const svg = overlaySvg();
+  if (svg) svg.addEventListener('click', tap);
 
   async function tick() {
     if (!running) return;
@@ -111,16 +131,13 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
     try {
       if (detector) {
         const codes = await detector.detect(videoEl);
-        const hit = codes[0];
-        const now = performance.now();
-        trackBox(cornersFromDetect(hit), now);
-        emitCodes((codes || []).map((c) => c && c.rawValue), now);
+        const picked = pickPrimaryDetect(codes, { prefer: liveCode });
+        trackTarget(picked, performance.now());
       } else if (window.jsQR && videoEl.readyState >= 2) {
         const srcW = videoEl.videoWidth;
         const srcH = videoEl.videoHeight;
         const size = fitJsQrFrame(srcW, srcH, 480);
-        let corners = null;
-        let data = '';
+        let picked = null;
         if (size.width && size.height) {
           canvas.width = size.width;
           canvas.height = size.height;
@@ -128,32 +145,28 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
           const img = ctx.getImageData(0, 0, size.width, size.height);
           const hit = window.jsQR(img.data, img.width, img.height);
           if (hit) {
-            data = hit.data || '';
-            const raw = cornersFromDetect(hit);
-            corners = raw
-              ? raw.map((p) => scaleFramePoint({
-                x: p.x,
-                y: p.y,
-                srcW,
-                srcH,
-                frameW: size.width,
-                frameH: size.height,
-              }))
-              : null;
+            const raw = pickPrimaryDetect([hit]);
+            if (raw) {
+              picked = {
+                code: raw.code,
+                corners: raw.corners.map((p) => scaleFramePoint({
+                  x: p.x,
+                  y: p.y,
+                  srcW,
+                  srcH,
+                  frameW: size.width,
+                  frameH: size.height,
+                })),
+              };
+            }
           }
         }
-        const now = performance.now();
-        trackBox(corners, now);
-        emitCodes(data ? [data] : [], now);
+        trackTarget(picked, performance.now());
       } else {
-        const now = performance.now();
-        trackBox(null, now);
-        emitCodes([], now);
+        trackTarget(null, performance.now());
       }
     } catch (e) {
-      const now = performance.now();
-      trackBox(null, now);
-      emitCodes([], now);
+      trackTarget(null, performance.now());
     }
     busy = false;
     if (running) requestAnimationFrame(tick);
@@ -172,8 +185,11 @@ export async function startCamera({ videoEl, overlayEl, onCode, onDenied }) {
       running = false;
       boxLast = null;
       boxShown = null;
-      codeHold = { lockedCode: null, lastSeenAt: null, lastEmitAt: null };
+      liveCode = '';
       paintBox(null);
+      paintLabel('', null);
+      if (labelEl) labelEl.removeEventListener('click', tap);
+      if (svg) svg.removeEventListener('click', tap);
       for (const t of stream.getTracks()) t.stop();
       videoEl.srcObject = null;
     },

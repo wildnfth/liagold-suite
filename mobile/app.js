@@ -7,7 +7,7 @@ import {
   productCatalogKey,
 } from './lib/catalog-sync.js';
 import { lookupKey, buildLookupEntry } from './lib/lookup-queue.js';
-import { shouldAcceptDetectedCode, shouldPauseCameraCode } from './lib/scan-cooldown.js';
+import { shouldAcceptDetectedCode } from './lib/scan-cooldown.js';
 import { pickLatestScan } from './lib/scan-latest.js';
 import { filterCodeSuggestions, highlightSuggestionMatch } from './lib/scan-suggest.js';
 import { filterProductsByScan, scanFilterCounts, catalogProductList as productsFromCatalog, productScanCode } from './lib/scan-filter.js';
@@ -73,7 +73,6 @@ let scannedCodes = new Set();
 let pendingLocalScans = new Set();
 let lastCode = null;
 let lastAt = 0;
-let camLockedCode = null;
 let trayChangedAt = 0;
 let lookupWait = null;
 let pendingPushes = [];
@@ -209,7 +208,6 @@ export async function submitCode(raw, opts) {
   if (!shouldAcceptDetectedCode({ code, lastCode, lastAt, now })) return;
   lastCode = code;
   lastAt = now;
-  if (opts && opts.fromCamera) camLockedCode = code;
   signalHit();
 
   const found = findProduct(products, code);
@@ -721,13 +719,8 @@ async function startCam() {
   const handle = await startCamera({
     videoEl,
     overlayEl: document.getElementById('cam-box-poly'),
-    onCode: (code) => {
-      const gate = shouldPauseCameraCode({ code, lockedCode: camLockedCode, now: Date.now() });
-      if (gate.clearLock) camLockedCode = null;
-      if (!gate.accept) return;
-      camLockedCode = String(code || '').trim();
-      submitCode(code, { fromCamera: true });
-    },
+    labelEl: document.getElementById('cam-code'),
+    onCode: (code) => submitCode(code, { fromCamera: true }),
     onDenied() {
       if (id !== camStartId) return;
       camStatus.textContent = 'Izinkan kamera, atau ketik kodenya';

@@ -119,11 +119,33 @@ button.ghost { background: #fff; color: var(--ink); border: 1px solid var(--line
   pointer-events: none;
   overflow: visible;
 }
+.cam-box.has-hit {
+  pointer-events: auto;
+  cursor: pointer;
+}
 .cam-box polygon {
   fill: rgba(34, 197, 94, 0.18);
   stroke: #22c55e;
   stroke-width: 3;
   stroke-linejoin: round;
+}
+.cam-code {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+  max-width: 90%;
+  margin: 0;
+  padding: 4px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.86);
+  color: #fff;
+  font: 700 12px/1.2 ui-monospace, monospace;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: auto;
+  cursor: pointer;
 }
 #cam {
   width: 100%;

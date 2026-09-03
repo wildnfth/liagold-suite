@@ -8,6 +8,8 @@ import {
   overlayPoints,
   matchCorners,
   smoothQrCorners,
+  pickPrimaryDetect,
+  quadCentroid,
 } from '../lib/qr-overlay.js';
 
 describe('mapCoverPoint', () => {
@@ -166,6 +168,41 @@ describe('smoothQrCorners', () => {
 
   it('clears the box when detection is gone', () => {
     assert.equal(smoothQrCorners({ prev, next: null }), null);
+  });
+});
+
+describe('pickPrimaryDetect', () => {
+  const small = {
+    rawValue: 'SMALL',
+    boundingBox: { x: 0, y: 0, width: 10, height: 10 },
+  };
+  const large = {
+    rawValue: 'LARGE',
+    boundingBox: { x: 0, y: 0, width: 40, height: 40 },
+  };
+
+  it('picks the largest code when several are in frame', () => {
+    const hit = pickPrimaryDetect([small, large, { rawValue: '' }]);
+    assert.equal(hit.code, 'LARGE');
+    assert.equal(hit.corners.length, 4);
+  });
+
+  it('keeps the preferred code even if another is larger', () => {
+    const hit = pickPrimaryDetect([small, large], { prefer: 'SMALL' });
+    assert.equal(hit.code, 'SMALL');
+  });
+
+  it('returns null without a readable code', () => {
+    assert.equal(pickPrimaryDetect([{ boundingBox: { x: 0, y: 0, width: 10, height: 10 } }]), null);
+    assert.equal(pickPrimaryDetect([]), null);
+  });
+});
+
+describe('quadCentroid', () => {
+  it('returns the center of a rectangle', () => {
+    assert.deepEqual(quadCentroid([
+      { x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 },
+    ]), { x: 5, y: 5 });
   });
 });
 
