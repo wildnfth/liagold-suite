@@ -16,6 +16,7 @@ const files = [
   'scan-latest.js',
   'scan-suggest.js',
   'scan-filter.js',
+  'scan-stats.js',
   'photo-caption.js',
   'photo-overlay.js',
   'es-event.js',

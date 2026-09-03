@@ -50,8 +50,13 @@
       <div id="suggest" hidden></div>
     </div>
     <p id="result" class="result"></p>
-    <p id="stats" class="stats"></p>
+    <div id="stats" class="stats-grid"></div>
+    <p class="hint">Klik kartu untuk filter · Semua / Sudah / Belum = daftar barang</p>
     <p id="peserta" class="peserta"></p>
+    <div id="filter-banner" hidden>
+      <span id="filter-banner-text"></span>
+      <button type="button" id="clear-filter">✕ Reset Filter</button>
+    </div>
     <div class="list-head">
       <span>Daftar barang</span>
       <div class="tabs">
@@ -61,7 +66,7 @@
       </div>
     </div>
     <ul id="products"></ul>
-    <p class="hint">Histori scan</p>
+    <p class="hint">Riwayat Scan</p>
     <ul id="log"></ul>
     <button id="leave-btn" type="button" class="ghost">Keluar</button>
   </section>

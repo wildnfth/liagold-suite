@@ -11,6 +11,7 @@ import { shouldAcceptDetectedCode } from './lib/scan-cooldown.js';
 import { pickLatestScan } from './lib/scan-latest.js';
 import { filterCodeSuggestions } from './lib/scan-suggest.js';
 import { filterProductsByScan, scanFilterCounts, catalogProductList as productsFromCatalog, productScanCode } from './lib/scan-filter.js';
+import { scanStatCards, filterHistoryByStatus, nextStatusFilter } from './lib/scan-stats.js';
 import { photoOverlayView, productPhotoAttrs } from './lib/photo-overlay.js';
 import { generateHistoryKey, sanitizeKey } from './lib/history-key.js';
 import { applyEsPut, applyEsPatch } from './lib/es-event.js';
@@ -90,6 +91,7 @@ let lastShownScanTime = '';
 let suggestItems = [];
 let suggestIndex = -1;
 let scanFilter = 'all';
+let statusFilter = 'none';
 
 document.getElementById('join-name').value = myName;
 document.getElementById('join-btn').addEventListener('click', join);
@@ -137,6 +139,19 @@ document.querySelector('.tabs')?.addEventListener('click', (e) => {
   if (!tab) return;
   e.preventDefault();
   scanFilter = tab.getAttribute('data-val') || 'all';
+  statusFilter = 'none';
+  render();
+});
+statsEl?.addEventListener('click', (e) => {
+  const card = e.target.closest('[data-filter]');
+  if (!card) return;
+  const filter = card.getAttribute('data-filter') || '';
+  if (!filter) return;
+  statusFilter = nextStatusFilter(statusFilter, filter);
+  render();
+});
+document.getElementById('clear-filter')?.addEventListener('click', () => {
+  statusFilter = 'none';
   render();
 });
 productsEl?.addEventListener('click', (e) => {
@@ -448,12 +463,34 @@ function render() {
   });
   trayEl.innerHTML = opts.join('');
   trayEl.value = selected;
-  const productCount = Object.keys(catalog.products || {}).length;
-  const masuk = scannedCodes.size;
-  statsEl.textContent = `MASUK ${masuk} · katalog ${productCount} · dupes ${esState.dupeCount || 0}`;
   const names = Object.values(esState.participants || {}).map((p) => p && p.nama).filter(Boolean);
   pesertaEl.textContent = names.length ? `Online: ${names.join(', ')}` : 'Online: -';
   const productList = productsFromCatalog(catalog.products);
+  const cards = scanStatCards({
+    products: productList,
+    scanned: scannedCodes,
+    history: esState.cloudHistory,
+  });
+  if (statsEl) {
+    statsEl.innerHTML = cards.map((c) => {
+      const on = c.filter && c.filter === statusFilter;
+      const click = c.filter ? ' stat-click' : '';
+      return `<button type="button" class="stat-card${click}${on ? ' on' : ''}" data-filter="${esc(c.filter)}" ${c.filter ? '' : 'disabled'}>
+        <span class="stat-val" style="color:${esc(c.color)}">${esc(c.value)}</span>
+        <span class="stat-label">${esc(c.label)}</span>
+      </button>`;
+    }).join('');
+  }
+  const banner = document.getElementById('filter-banner');
+  const bannerText = document.getElementById('filter-banner-text');
+  if (banner) {
+    const on = statusFilter && statusFilter !== 'none';
+    banner.hidden = !on;
+    if (on && bannerText) {
+      const n = filterHistoryByStatus(esState.cloudHistory, statusFilter).length;
+      bannerText.textContent = `Filter: ${statusFilter} — ${n} scan`;
+    }
+  }
   const counts = scanFilterCounts({ products: productList, scanned: scannedCodes });
   document.querySelectorAll('.scan-tab').forEach((t) => {
     t.classList.toggle('on', t.getAttribute('data-val') === scanFilter);
@@ -462,31 +499,59 @@ function render() {
     el.textContent = String(counts[el.dataset.count] ?? 0);
   });
   if (productsEl) {
-    const filtered = filterProductsByScan({
-      products: productList,
-      scanned: scannedCodes,
-      filter: scanFilter,
-    });
-    if (!counts.all) {
-      productsEl.innerHTML = '<li class="empty">Pilih baki untuk memuat</li>';
-    } else if (!filtered.length) {
-      const msg = scanFilter === 'unscanned'
-        ? 'Semua sudah discan!'
-        : 'Belum ada yang discan';
-      productsEl.innerHTML = `<li class="empty">${msg}</li>`;
+    if (statusFilter && statusFilter !== 'none') {
+      const filtered = filterHistoryByStatus(esState.cloudHistory, statusFilter);
+      if (!filtered.length) {
+        productsEl.innerHTML = `<li class="empty">Belum ada scan dengan status "${esc(statusFilter)}"</li>`;
+      } else {
+        productsEl.innerHTML = filtered.map((l) => {
+          const photo = productPhotoAttrs({
+            image: l.image,
+            name: l.name,
+            codeProduct: l.codeProduct,
+            weight: l.weight,
+          });
+          const code = l.codeProduct && l.codeProduct !== '-' ? l.codeProduct : '';
+          const attrs = code
+            ? ` data-photo data-img="${esc(photo.img)}" data-name="${esc(photo.name)}" data-code="${esc(photo.code)}" data-weight="${esc(photo.weight)}"`
+            : '';
+          return `<li class="log-row"${attrs}>
+            <div>
+              <div class="code">${esc(code || '-')}</div>
+              <div class="name">${esc(l.name || '-')}</div>
+            </div>
+            <span class="meta">${esc(l.by || '-')}</span>
+            <span class="status">${esc(l.status)}</span>
+          </li>`;
+        }).join('');
+      }
     } else {
-      productsEl.innerHTML = filtered.map((p) => {
-        const sc = scannedCodes.has(productScanCode(p));
-        const photo = productPhotoAttrs(p);
-        return `<li class="${sc ? 'done' : ''}" data-photo data-img="${esc(photo.img)}" data-name="${esc(photo.name)}" data-code="${esc(photo.code)}" data-weight="${esc(photo.weight)}">
-          <div>
-            <div class="code">${esc(p.codeProduct)}</div>
-            <div class="name">${esc(p.name || '-')}</div>
-          </div>
-          <span class="meta">${esc(p.weight || 0)} gr</span>
-          <span>${sc ? '✅' : '⬜'}</span>
-        </li>`;
-      }).join('');
+      const filtered = filterProductsByScan({
+        products: productList,
+        scanned: scannedCodes,
+        filter: scanFilter,
+      });
+      if (!counts.all) {
+        productsEl.innerHTML = '<li class="empty">Pilih baki untuk memuat</li>';
+      } else if (!filtered.length) {
+        const msg = scanFilter === 'unscanned'
+          ? 'Semua sudah discan!'
+          : 'Belum ada yang discan';
+        productsEl.innerHTML = `<li class="empty">${msg}</li>`;
+      } else {
+        productsEl.innerHTML = filtered.map((p) => {
+          const sc = scannedCodes.has(productScanCode(p));
+          const photo = productPhotoAttrs(p);
+          return `<li class="${sc ? 'done' : ''}" data-photo data-img="${esc(photo.img)}" data-name="${esc(photo.name)}" data-code="${esc(photo.code)}" data-weight="${esc(photo.weight)}">
+            <div>
+              <div class="code">${esc(p.codeProduct)}</div>
+              <div class="name">${esc(p.name || '-')}</div>
+            </div>
+            <span class="meta">${esc(p.weight || 0)} gr</span>
+            <span>${sc ? '✅' : '⬜'}</span>
+          </li>`;
+        }).join('');
+      }
     }
   }
   const rows = Object.values(esState.cloudHistory || {})
