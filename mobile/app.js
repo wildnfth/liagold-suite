@@ -1,4 +1,4 @@
-import { fbGet, fbPut, fbPost, fbDelete, openSessionEs } from './firebase.js';
+import { fbGet, fbPut, fbPost, fbDelete, fbPatch, openSessionEs } from './firebase.js';
 import { shouldRejectExpiredJoin } from './lib/session-expiry.js';
 import { classifyFoundScan } from './lib/scan-classify.js';
 import {
@@ -445,8 +445,10 @@ async function onTrayChange() {
   const info = (catalog.trays || {})[val];
   trayChangedAt = Date.now();
   try {
-    await fbPut(`/opname/${sessionId}/catalog/selectedTray`, val);
-    await fbPut(`/opname/${sessionId}/catalog/selectedTrayCode`, info ? info.trayCode : '');
+    await fbPatch(`/opname/${sessionId}/catalog`, {
+      selectedTray: val,
+      selectedTrayCode: info ? info.trayCode : '',
+    });
   } catch (e) {
     showResult('Gagal ganti baki', 'bad');
   }

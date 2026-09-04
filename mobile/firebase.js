@@ -22,6 +22,14 @@ export async function fbPost(path, data) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 }
 
+export async function fbPatch(path, data) {
+  const res = await fetch(`${FIREBASE}${path}.json`, {
+    method: 'PATCH',
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
 export async function fbDelete(path) {
   const res = await fetch(`${FIREBASE}${path}.json`, {
     method: 'DELETE',

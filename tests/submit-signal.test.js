@@ -156,6 +156,10 @@ function historyPuts() {
   return fetchCalls.filter((c) => c.method === 'PUT' && c.url.includes('/history/')).length;
 }
 
+function catalogWrites() {
+  return fetchCalls.filter((c) => c.url.includes('/catalog'));
+}
+
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 let submitCode;
@@ -209,5 +213,36 @@ describe('submitCode hit feedback', () => {
     assert.equal(historyPuts(), 1);
     assert.equal(flashAdds(), flashBefore + 1);
     assert.equal(vibrateCalls(), vibeBefore + 1);
+  });
+
+  it('writes a tray change as one atomic PATCH', async () => {
+    const iso = new Date().toISOString();
+    const catalog = withHostAt(
+      buildCatalogPayload({
+        trays: [
+          { trayId: '13', trayCode: 'B13', count: 2 },
+          { trayId: '14', trayCode: 'B14', count: 1 },
+        ],
+        selectedTray: '13',
+        selectedTrayCode: 'B13',
+        products: [{
+          codeProduct: 'PC1', code: 'C1', name: 'Emas', weight: 5, image: '', trayId: '14', trayCode: 'B14',
+        }],
+        now: iso,
+      }),
+      iso,
+    );
+    esHandlers.put({
+      data: JSON.stringify({ path: '/', data: { catalog, cloudHistory: {}, meta: { lastScanAt: iso } } }),
+    });
+    await sleep(20);
+    const before = catalogWrites().length;
+    elById('tray').value = '14';
+    elById('tray').fire('change');
+    await sleep(20);
+    const writes = catalogWrites().slice(before);
+    assert.equal(writes.length, 1, 'tray switch must be a single write');
+    assert.equal(writes[0].method, 'PATCH');
+    assert.deepEqual(JSON.parse(writes[0].body), { selectedTray: '14', selectedTrayCode: 'B14' });
   });
 });
