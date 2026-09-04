@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.7
-// @description  v2.2.7: Module 2 footer skips hidden rows like Module 1
+// @version      2.2.9
+// @description  v2.2.9: totals bar/tfoot use table cell font-weight
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -1199,6 +1199,135 @@ const LG = {
       total: methods.reduce((sum, row) => sum + row.amount, 0),
       count: list.length
     };
+  },
+  TOTALS_STICKY_BG: '#fff',
+  totalsFooterCss({
+    rowClass,
+    labelClass,
+    valueClass,
+    negClass,
+    methodClass,
+    amountClass,
+  } = {}) {
+    const row = rowClass || 'gold-total-footer-row';
+    const label = labelClass || 'gold-total-label';
+    const value = valueClass || '';
+    const neg = negClass || 'gold-total-negative';
+    let css = `
+.${row} td {
+background: #fff !important;
+border-top: 1px solid rgba(0,0,0,.12) !important;
+white-space: nowrap;
+position: sticky;
+bottom: 0;
+z-index: 60;
+box-sizing: border-box;
+}
+.${row} td.mat-table-sticky {
+z-index: 65;
+}
+.${row} td.${label} {
+background: #fff !important;
+text-align: left !important;
+padding-left: 16px !important;
+z-index: 70 !important;
+white-space: nowrap !important;
+}
+.${row} td.${label}.mat-table-sticky {
+z-index: 70 !important;
+}
+.${row} td.${neg} {
+color: #d2453a !important;
+}
+tfoot {
+display: table-footer-group;
+}
+`;
+    if (value) {
+      css += `
+.${row} td.${value} {
+text-align: right !important;
+font-variant-numeric: tabular-nums;
+}
+`;
+    }
+    if (methodClass) {
+      css += `
+.${row} td.${methodClass} {
+text-align: left !important;
+max-width: 160px;
+overflow: hidden;
+text-overflow: ellipsis;
+}
+`;
+    }
+    if (amountClass) {
+      css += `
+.${row} td.${amountClass} {
+text-align: right !important;
+}
+`;
+    }
+    return css;
+  },
+  totalsPayBarCss(barId) {
+    const id = barId || 'gold-sales-pay-bar';
+    return `
+#${id} {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 0;
+  margin: 0 0 8px;
+  border-top: 1px solid rgba(0,0,0,.12);
+  background: #fff;
+  font-family: inherit;
+  font-weight: 400;
+  font-size: inherit;
+  color: inherit;
+}
+#${id} .gold-sales-pay-label {
+  background: transparent;
+  color: inherit;
+  padding: 10px 16px;
+  font-family: inherit;
+  font-size: inherit;
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+}
+#${id} .gold-sales-pay-methods {
+  display: flex;
+  flex-wrap: wrap;
+  flex: 1;
+}
+#${id} .gold-sales-pay-cell {
+  padding: 10px 16px;
+  min-width: 140px;
+  border-left: 1px solid rgba(0,0,0,.08);
+}
+#${id} .gold-sales-pay-method {
+  display: block;
+  font-family: inherit;
+  font-size: inherit;
+  color: inherit;
+}
+#${id} .gold-sales-pay-amount {
+  display: block;
+  margin-top: 2px;
+  font-family: inherit;
+  font-size: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: left;
+}
+#${id} .gold-sales-pay-amount.neg {
+  color: #d2453a;
+}
+#${id} .gold-sales-pay-sum {
+  background: transparent;
+  margin-left: auto;
+}
+`;
   }
 };
 
@@ -1443,56 +1572,13 @@ const LG = {
         font-variant-numeric: tabular-nums;
       }
 
-      .${FOOTER_ROW_CLASS} td {
-        background: #fffbe8 !important;
-        font-weight: 800;
-        color: #15151c;
-        border-top: 2px solid #e3b53d !important;
-        white-space: nowrap;
-        position: sticky;
-        bottom: 0;
-        z-index: 60;
-        box-sizing: border-box;
-      }
-
-      .${FOOTER_ROW_CLASS} td.mat-table-sticky {
-        z-index: 65;
-      }
-
-      .${FOOTER_ROW_CLASS} td.${FOOTER_LABEL_CLASS} {
-        background: #fff3c9 !important;
-        color: #7c5c00;
-        text-align: left !important;
-        padding-left: 16px !important;
-        font-size: 13px;
-        z-index: 70 !important;
-        white-space: nowrap !important;
-        font-weight: 800;
-      }
-
-      .${FOOTER_ROW_CLASS} td.${FOOTER_LABEL_CLASS}.mat-table-sticky {
-        z-index: 70 !important;
-      }
-
-      .${FOOTER_ROW_CLASS} td.${FOOTER_NEG_CLASS} {
-        color: #d2453a !important;
-      }
-
-      .${FOOTER_ROW_CLASS} td.${METHOD_CELL_CLASS} {
-        text-align: left !important;
-        font-size: 12px;
-        max-width: 160px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-      }
-
-      .${FOOTER_ROW_CLASS} td.${AMOUNT_CELL_CLASS} {
-        text-align: right !important;
-      }
-
-      tfoot {
-        display: table-footer-group;
-      }
+      ${LG.totalsFooterCss({
+        rowClass: FOOTER_ROW_CLASS,
+        labelClass: FOOTER_LABEL_CLASS,
+        negClass: FOOTER_NEG_CLASS,
+        methodClass: METHOD_CELL_CLASS,
+        amountClass: AMOUNT_CELL_CLASS,
+      })}
     `;
 
     document.head.appendChild(style);
@@ -2629,38 +2715,12 @@ function injectStyle() {
 if (document.getElementById(STYLE_ID)) return;
 const style = document.createElement('style');
 style.id = STYLE_ID;
-style.textContent = `
-.${ROW_CLASS} td {
-background: #fffbe8 !important;
-font-weight: 800;
-color: #15151c;
-border-top: 2px solid #e3b53d !important;
-white-space: nowrap;
-position: sticky;
-bottom: 0;
-z-index: 60;
-}
-.${ROW_CLASS} td.gold-total-label {
-background: #fff3c9 !important;
-color: #7c5c00;
-text-align: left !important;
-padding-left: 16px !important;
-font-size: 13px;
-z-index: 70 !important;
-white-space: nowrap !important;
-font-weight: 800;
-}
-.${ROW_CLASS} td.gold-total-value {
-text-align: right !important;
-font-variant-numeric: tabular-nums;
-}
-.${ROW_CLASS} td.gold-total-negative {
-color: #d2453a !important;
-}
-tfoot {
-display: table-footer-group;
-}
-`;
+style.textContent = LG.totalsFooterCss({
+  rowClass: ROW_CLASS,
+  labelClass: 'gold-total-label',
+  valueClass: 'gold-total-value',
+  negClass: 'gold-total-negative',
+});
 document.head.appendChild(style);
 }
 const normalize = (s) => {
@@ -2770,7 +2830,7 @@ td.classList.add('mat-table-sticky');
 td.style.position = 'sticky';
 td.style.left = th.style.left;
 td.style.zIndex = (i === labelIdx) ? '70' : '62';
-td.style.backgroundColor = (i === labelIdx) ? '#fff3c9' : '#fffbe8';
+td.style.backgroundColor = LG.TOTALS_STICKY_BG;
 }
 function renderTable(table) {
 const tr = ensureFooterRow(table);
@@ -2871,60 +2931,7 @@ setInterval(safeUpdate, 2500);
     if (document.getElementById(STYLE_ID)) return;
     const style = document.createElement('style');
     style.id = STYLE_ID;
-    style.textContent = `
-#${BAR_ID} {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
-  gap: 0;
-  margin: 0 0 8px;
-  border-top: 2px solid #e3b53d;
-  background: #fffbe8;
-  font-family: inherit;
-  font-weight: 800;
-  color: #15151c;
-}
-#${BAR_ID} .gold-sales-pay-label {
-  background: #fff3c9;
-  color: #7c5c00;
-  padding: 10px 16px;
-  font-size: 13px;
-  white-space: nowrap;
-  display: flex;
-  align-items: center;
-}
-#${BAR_ID} .gold-sales-pay-methods {
-  display: flex;
-  flex-wrap: wrap;
-  flex: 1;
-}
-#${BAR_ID} .gold-sales-pay-cell {
-  padding: 10px 16px;
-  min-width: 140px;
-  border-left: 1px solid #f0e2a8;
-}
-#${BAR_ID} .gold-sales-pay-method {
-  display: block;
-  font-size: 11px;
-  font-weight: 700;
-  color: #7c5c00;
-  letter-spacing: .02em;
-}
-#${BAR_ID} .gold-sales-pay-amount {
-  display: block;
-  margin-top: 2px;
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-  text-align: left;
-}
-#${BAR_ID} .gold-sales-pay-amount.neg {
-  color: #d2453a;
-}
-#${BAR_ID} .gold-sales-pay-sum {
-  background: #fff3c9;
-  margin-left: auto;
-}
-`;
+    style.textContent = LG.totalsPayBarCss(BAR_ID);
     document.head.appendChild(style);
   }
 
@@ -3223,60 +3230,7 @@ setInterval(safeUpdate, 2500);
     if (document.getElementById(STYLE_ID)) return;
     const style = document.createElement('style');
     style.id = STYLE_ID;
-    style.textContent = `
-#${BAR_ID} {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: stretch;
-  gap: 0;
-  margin: 0 0 8px;
-  border-top: 2px solid #e3b53d;
-  background: #fffbe8;
-  font-family: inherit;
-  font-weight: 800;
-  color: #15151c;
-}
-#${BAR_ID} .gold-sales-pay-label {
-  background: #fff3c9;
-  color: #7c5c00;
-  padding: 10px 16px;
-  font-size: 13px;
-  white-space: nowrap;
-  display: flex;
-  align-items: center;
-}
-#${BAR_ID} .gold-sales-pay-methods {
-  display: flex;
-  flex-wrap: wrap;
-  flex: 1;
-}
-#${BAR_ID} .gold-sales-pay-cell {
-  padding: 10px 16px;
-  min-width: 140px;
-  border-left: 1px solid #f0e2a8;
-}
-#${BAR_ID} .gold-sales-pay-method {
-  display: block;
-  font-size: 11px;
-  font-weight: 700;
-  color: #7c5c00;
-  letter-spacing: .02em;
-}
-#${BAR_ID} .gold-sales-pay-amount {
-  display: block;
-  margin-top: 2px;
-  font-size: 14px;
-  font-variant-numeric: tabular-nums;
-  text-align: left;
-}
-#${BAR_ID} .gold-sales-pay-amount.neg {
-  color: #d2453a;
-}
-#${BAR_ID} .gold-sales-pay-sum {
-  background: #fff3c9;
-  margin-left: auto;
-}
-`;
+    style.textContent = LG.totalsPayBarCss(BAR_ID);
     document.head.appendChild(style);
   }
 
