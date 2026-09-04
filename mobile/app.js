@@ -208,7 +208,6 @@ export async function submitCode(raw, opts) {
   if (!shouldAcceptDetectedCode({ code, lastCode, lastAt, now })) return;
   lastCode = code;
   lastAt = now;
-  signalHit();
 
   const found = findProduct(products, code);
   const hit = classifyFoundScan({
@@ -221,6 +220,7 @@ export async function submitCode(raw, opts) {
     await startLookup(code);
     return;
   }
+  signalHit();
   const status = hit.kind === 'masuk' ? ST.MASUK : hit.kind === 'sudah' ? ST.SUDAH : ST.SALAH_BAKI;
   const product = hit.found;
   const iso = new Date().toISOString();
