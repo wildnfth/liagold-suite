@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.3
-// @description  v2.2.3: dashed payment method names keep full name, mid-string dash not negative
+// @version      2.2.4
+// @description  v2.2.4: pickProductPrice parses numeric SellingPrice strings
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -617,7 +617,7 @@ const LG = {
     for (const key of ['SellingPrice', 'Price', 'SellingPriceValue']) {
       if (typeof item[key] === 'number' && Number.isFinite(item[key])) return item[key];
     }
-    return LG.parseIdNumber(item.SellingPriceDisplay || item.Price || 0);
+    return LG.parseIdNumber(item.SellingPriceDisplay || item.SellingPrice || item.Price || 0);
   },
   parsePendingQueue(raw) {
     if (raw == null) return [];

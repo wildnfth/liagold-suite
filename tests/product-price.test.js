@@ -15,6 +15,11 @@ describe('pickProductPrice', () => {
     );
   });
 
+  it('parses a numeric SellingPrice string instead of returning 0', () => {
+    assert.equal(pickProductPrice({ SellingPrice: '1500000' }, parseIdNumber), 1500000);
+    assert.equal(pickProductPrice({ SellingPrice: '1.500.000' }, parseIdNumber), 1500000);
+  });
+
   it('returns 0 for a missing item', () => {
     assert.equal(pickProductPrice(null, parseIdNumber), 0);
   });
