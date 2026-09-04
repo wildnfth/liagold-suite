@@ -247,10 +247,6 @@ function patchHistoryItem(state, data, { key }) {
   return { state: { ...state, cloudHistory }, effects: ['onCloudUpdate'] };
 }
 
-function patchScanItem(state) {
-  return { state, effects: ['onCloudUpdate'] };
-}
-
 function patchPeserta(state, data) {
   const participants = { ...state.participants };
   for (const [key, value] of Object.entries(data || {})) {
@@ -277,11 +273,11 @@ const PATCH_HANDLERS = {
   meta: putMeta,
   metaLastScanAt: putMetaLastScanAt,
   scans: putScans,
-  scanItem: patchScanItem,
+  scanItem: putScanItem,
   peserta: patchPeserta,
   pesertaItem: putPesertaItem,
   dupes: patchDupes,
-  dupeItem: patchDupes,
+  dupeItem: putDupeItem,
   catalog: putCatalog,
   catalogField: putCatalogField,
   lookups: putLookups,

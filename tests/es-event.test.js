@@ -192,10 +192,20 @@ describe('applyEsPatch', () => {
     assert.equal('extra' in nested.state.cloudHistory.k1, false);
   });
 
-  it('keeps the existing no-op for a patched /scans item', () => {
+  it('merges a patched /scans item like a put', () => {
     const out = applyEsPatch(blankState(), '/scans/s1', { codeProduct: 'A' });
-    assert.deepEqual(out.state.cloudHistory, {});
+    assert.deepEqual(out.state.cloudHistory, { s1: { codeProduct: 'A' } });
     assert.deepEqual(out.effects, ['onCloudUpdate']);
+    const partial = applyEsPatch(blankState(), '/scans/s1', { by: 'Lia' });
+    assert.deepEqual(partial.state.cloudHistory, {});
+  });
+
+  it('counts a patched /dupes item like a put', () => {
+    const inc = applyEsPatch(blankState({ dupeCount: 0 }), '/dupes/x', { by: 'Lia', time: 't' });
+    assert.equal(inc.state.dupeCount, 1);
+    assert.deepEqual(inc.effects, ['updateStats']);
+    const del = applyEsPatch(blankState({ dupeCount: 1 }), '/dupes/x', null);
+    assert.equal(del.state.dupeCount, 0);
   });
 
   it('merges /peserta patches and counts /dupes from object keys', () => {
@@ -208,7 +218,7 @@ describe('applyEsPatch', () => {
     assert.equal(pes.state.participants.u3.name, 'C');
     assert.deepEqual(pes.effects, ['renderParticipants']);
     const dupes = applyEsPatch(blankState({ dupeCount: 0 }), '/dupes/x', { a: 1, b: 1 });
-    assert.equal(dupes.state.dupeCount, 2);
+    assert.equal(dupes.state.dupeCount, 1);
     assert.deepEqual(dupes.effects, ['updateStats']);
   });
 });

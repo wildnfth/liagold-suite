@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.4
-// @description  v2.2.4: pickProductPrice parses numeric SellingPrice strings
+// @version      2.2.5
+// @description  v2.2.5: PATCH scans/dupes items handled like PUT, no more dropped scans
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -382,9 +382,6 @@ const LG = {
     cloudHistory[key] = item;
     return { state: { ...state, cloudHistory }, effects: ['onCloudUpdate'] };
   },
-  patchScanItem(state) {
-    return { state, effects: ['onCloudUpdate'] };
-  },
   patchPeserta(state, data) {
     const participants = { ...state.participants };
     for (const [key, value] of Object.entries(data || {})) {
@@ -411,11 +408,11 @@ const LG = {
       meta: LG.putMeta,
       metaLastScanAt: LG.putMetaLastScanAt,
       scans: LG.putScans,
-      scanItem: LG.patchScanItem,
+      scanItem: LG.putScanItem,
       peserta: LG.patchPeserta,
       pesertaItem: LG.putPesertaItem,
       dupes: LG.patchDupes,
-      dupeItem: LG.patchDupes,
+      dupeItem: LG.putDupeItem,
       catalog: LG.putCatalog,
       catalogField: LG.putCatalogField,
       lookups: LG.putLookups,
