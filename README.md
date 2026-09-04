@@ -26,6 +26,12 @@ Join the same multiplayer session code from the userscript. Laptop must stay ope
 
 Deploy: `node scripts/sync-mobile-lib.mjs` then `wrangler deploy` (Cloudflare Worker `liagold-scan`, custom domain `scan.tokomaslia.com`).
 
+## Development
+
+- Test: `npm test` (`node --test`, suite di `tests/`).
+- `lib/*.js` adalah source of truth. Logika baru/perbaikan masuk `lib/` + test dulu, lalu mirror identik ke `LG` di `liagold-suite.user.js` dan bump `@version` + `@description`.
+- Setelah ubah `lib/`: `node scripts/sync-mobile-lib.mjs` agar `mobile/lib/` sama, lalu `wrangler deploy` bila menyentuh phone scanner.
+
 ## Maintenance
 
 - Bug tracker: [Issues](https://github.com/wildnfth/liagold-suite/issues)
