@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseArrayJson, scannedCodesFromLog, mergeInflightScanLog } from '../lib/scan-storage.js';
+import { parseArrayJson, scannedCodesFromLog, mergeInflightScanLog, emptyScanState } from '../lib/scan-storage.js';
 import { generateHistoryKey } from '../lib/history-key.js';
 
 describe('parseArrayJson', () => {
@@ -27,6 +27,22 @@ describe('scannedCodesFromLog', () => {
       { status: 'MASUK' },
     ]);
     assert.deepEqual(codes, ['abc']);
+  });
+});
+
+describe('emptyScanState', () => {
+  it('returns fresh empty scan containers on every call', () => {
+    const a = emptyScanState();
+    assert.deepEqual(a.scanLog, []);
+    assert.deepEqual([...a.scannedCodes], []);
+    assert.deepEqual(a.cloudHistory, {});
+    a.scanLog.push({ codeProduct: 'PC1' });
+    a.scannedCodes.add('pc1');
+    a.cloudHistory.k = { codeProduct: 'PC1' };
+    const b = emptyScanState();
+    assert.deepEqual(b.scanLog, []);
+    assert.deepEqual([...b.scannedCodes], []);
+    assert.deepEqual(b.cloudHistory, {});
   });
 });
 

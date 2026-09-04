@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.5
-// @description  v2.2.5: PATCH scans/dupes items handled like PUT, no more dropped scans
+// @version      2.2.6
+// @description  v2.2.6: multi reset clears local scan state so deleted progress stays deleted
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -546,6 +546,9 @@ const LG = {
       set.add(String(row.codeProduct).toLowerCase());
     }
     return [...set];
+  },
+  emptyScanState() {
+    return { scanLog: [], scannedCodes: new Set(), cloudHistory: {} };
   },
   mergeInflightScanLog(cloudEntries, localLog, cloudHistory) {
     const keys = new Set(Object.keys(cloudHistory || {}));
@@ -6061,6 +6064,10 @@ try {
 await LG.deleteSessionNodes(fetch, LG.sessionResetUrls(FIREBASE, sessionId));
 pendingLocalScans = new Set();
 knownCloudKeys = new Set();
+const fresh = LG.emptyScanState();
+scanLog = fresh.scanLog;
+scannedCodes = fresh.scannedCodes;
+cloudHistory = fresh.cloudHistory;
 formFilledCodes = new Set();
 formAttemptCounts = new Map();
 clearFormQueue();
@@ -6070,6 +6077,9 @@ statusFilter = 'none';
 lastScanAt = new Date().toISOString();
 fbPut(`/opname/${sessionId}/meta/lastScanAt`, lastScanAt).catch(() => {});
 updateCountdownDisplay();
+updateStats();
+renderLog();
+applyFilters();
 updateStatus('🔄 Progress sesi direset.');
 } catch (e) {
 updateStatus('❌ Gagal reset progress: ' + e.message);
