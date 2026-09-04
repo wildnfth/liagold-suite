@@ -40,19 +40,19 @@ export async function startCamera({ videoEl, overlayEl, labelEl, onCode, onDenie
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
   const zoomCaps = readZoomCaps(typeof track.getCapabilities === 'function' ? track.getCapabilities() : {});
 
-  function overlaySvg() {
+  function overlayPoly() {
     if (!overlayEl) return null;
     return overlayEl.tagName === 'polygon' || overlayEl.tagName === 'POLYGON'
-      ? overlayEl.ownerSVGElement
-      : overlayEl;
+      ? overlayEl
+      : overlayEl.querySelector('polygon');
   }
 
   function paintBox(corners) {
     if (!overlayEl) return;
-    const svg = overlaySvg();
-    const poly = overlayEl.tagName === 'polygon' || overlayEl.tagName === 'POLYGON'
-      ? overlayEl
-      : overlayEl.querySelector('polygon');
+    const svg = overlayEl.tagName === 'polygon' || overlayEl.tagName === 'POLYGON'
+      ? overlayEl.ownerSVGElement
+      : overlayEl;
+    const poly = overlayPoly();
     const viewW = videoEl.clientWidth;
     const viewH = videoEl.clientHeight;
     if (svg) {
@@ -118,8 +118,8 @@ export async function startCamera({ videoEl, overlayEl, labelEl, onCode, onDenie
   }
 
   if (labelEl) labelEl.addEventListener('click', tap);
-  const svg = overlaySvg();
-  if (svg) svg.addEventListener('click', tap);
+  const poly = overlayPoly();
+  if (poly) poly.addEventListener('click', tap);
 
   async function tick() {
     if (!running) return;
@@ -189,7 +189,7 @@ export async function startCamera({ videoEl, overlayEl, labelEl, onCode, onDenie
       paintBox(null);
       paintLabel('', null);
       if (labelEl) labelEl.removeEventListener('click', tap);
-      if (svg) svg.removeEventListener('click', tap);
+      if (poly) poly.removeEventListener('click', tap);
       for (const t of stream.getTracks()) t.stop();
       videoEl.srcObject = null;
     },
