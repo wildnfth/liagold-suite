@@ -40,6 +40,12 @@ describe('parseSalesCashBanks', () => {
     );
   });
 
+  it('keeps a dashed method name with a positive amount', () => {
+    assert.deepEqual(parseSalesCashBanks('TRANSFER - BCA - 1.000.000<br>'), [
+      { method: 'TRANSFER - BCA', amount: 1000000 },
+    ]);
+  });
+
   it('returns empty for blank input', () => {
     assert.deepEqual(parseSalesCashBanks(''), []);
     assert.deepEqual(parseSalesCashBanks(null), []);

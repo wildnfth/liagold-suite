@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.2
-// @description  v2.2.2: purchasing method totals ignore parentheses/minus
+// @version      2.2.3
+// @description  v2.2.3: dashed payment method names keep full name, mid-string dash not negative
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -456,7 +456,7 @@ const LG = {
     if (value == null) return 0;
     const original = String(value).trim();
     if (!original) return 0;
-    const negative = /[-−]/.test(original);
+    const negative = /^[-−]/.test(original);
     const raw = original.replace(/[^\d.,]/g, '');
     if (!raw) return 0;
     const num = parseFloat(LG.normalizeIdNumberRaw(raw));
@@ -1070,10 +1070,10 @@ const LG = {
     for (const rawLine of text.split(/\n+/)) {
       const line = rawLine.replace(/\s+/g, ' ').trim();
       if (!line) continue;
-      const match = line.match(/^(.+?)\s+-\s+(.+)$/);
-      if (!match) continue;
-      const method = match[1].trim();
-      const amountRaw = match[2].trim();
+      const idx = line.lastIndexOf(' - ');
+      if (idx === -1) continue;
+      const method = line.slice(0, idx).trim();
+      const amountRaw = line.slice(idx + 3).trim();
       if (!method) continue;
       const paren = /^\(.*\)$/.test(amountRaw);
       const amount = LG.parseIdNumber(amountRaw.replace(/[()]/g, ''));
