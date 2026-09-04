@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.6
-// @description  v2.2.6: multi reset clears local scan state so deleted progress stays deleted
+// @version      2.2.7
+// @description  v2.2.7: Module 2 footer skips hidden rows like Module 1
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -468,6 +468,9 @@ const LG = {
   },
   isPurchasingFamilyChild(pathname) {
     return /^\/purchasing-non-invoice\/.+/.test(pathname) || /^\/purchasing\/.+/.test(pathname);
+  },
+  isVisibleRow(row) {
+    return !!row && row.offsetParent !== null;
   },
   MAX_FORM_CODE_ATTEMPTS: 3,
   recordFormAttempt(attempts, code, success, maxAttempts) {
@@ -1660,7 +1663,7 @@ const LG = {
   function getVisibleRows(table) {
     return Array
       .from(table.querySelectorAll('tbody tr.mat-row'))
-      .filter((row) => row.offsetParent !== null);
+      .filter((row) => LG.isVisibleRow(row));
   }
 
   function getRowCode(row) {
@@ -2771,7 +2774,7 @@ td.style.backgroundColor = (i === labelIdx) ? '#fff3c9' : '#fffbe8';
 }
 function renderTable(table) {
 const tr = ensureFooterRow(table);
-const rows = Array.from(table.querySelectorAll('tbody tr.mat-row'));
+const rows = getVisibleRows(table);
 const headerCells = Array.from(table.querySelectorAll('thead tr.mat-header-row th.mat-header-cell'));
 if (!headerCells.length) return;
 const sums = sumFooterColumns(rows);
