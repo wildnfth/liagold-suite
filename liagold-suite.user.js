@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.9
-// @description  v2.2.9: totals bar/tfoot use table cell font-weight
+// @version      2.2.10
+// @description  v2.2.10: non-invoice detail table shows TOTAL footer
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -471,6 +471,11 @@ const LG = {
   },
   isVisibleRow(row) {
     return !!row && row.offsetParent !== null;
+  },
+  getVisibleRows(table) {
+    return Array
+      .from(table.querySelectorAll('tbody tr.mat-row'))
+      .filter((row) => LG.isVisibleRow(row));
   },
   MAX_FORM_CODE_ATTEMPTS: 3,
   recordFormAttempt(attempts, code, success, maxAttempts) {
@@ -2834,7 +2839,7 @@ td.style.backgroundColor = LG.TOTALS_STICKY_BG;
 }
 function renderTable(table) {
 const tr = ensureFooterRow(table);
-const rows = getVisibleRows(table);
+const rows = LG.getVisibleRows(table);
 const headerCells = Array.from(table.querySelectorAll('thead tr.mat-header-row th.mat-header-cell'));
 if (!headerCells.length) return;
 const sums = sumFooterColumns(rows);
