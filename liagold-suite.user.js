@@ -1,8 +1,9 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.10
-// @description  v2.2.10: non-invoice detail table shows TOTAL footer
+// @version      2.2.11
+// @description  v2.2.11: teks overlay di Cetak Invoice Lama sebelum QZ print
+// @require      https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -14,6 +15,19 @@
 'use strict';
 if (window.__lgUltimateSuite) return;
 window.__lgUltimateSuite = true;
+
+// Geser teks Cetak Invoice Lama di sini, lalu refresh halaman.
+// xMm = milimeter dari tepi kiri PDF. yMm = null berarti tengah vertikal.
+const LG_INVOICE_OVERLAY = {
+  xMm: 111,
+  yMm: null,
+  fontSize: 7,
+  lineGap: 1.5,
+  lines: [
+    'Potongan bisa berubah apabila',
+    'harga emas turun +-10%',
+  ],
+};
 
 // synced from lib/*.js — keep LG bodies identical
 // Keep bodies identical.
@@ -1333,8 +1347,174 @@ text-align: right !important;
   margin-left: auto;
 }
 `;
-  }
+  },
+  isOldSalesInvoiceUrl(url) {
+    if (typeof url !== 'string' || !url) return false;
+    let parsed;
+    try {
+      parsed = new URL(url, 'https://liagold.cuan.co');
+    } catch (e) {
+      return false;
+    }
+    const path = parsed.pathname.replace(/\/+$/, '');
+    if (!path.endsWith('/sales/invoice')) return false;
+    return parsed.searchParams.get('printType') === 'OLD';
+  },
+  createInvoiceOverlayGate(timeoutMs) {
+    const wait = timeoutMs == null ? 20000 : timeoutMs;
+    let next = 1;
+    const pending = [];
+    function sweep(at) {
+      const now = at == null ? Date.now() : at;
+      for (let i = pending.length - 1; i >= 0; i--) {
+        if (pending[i].exp <= now) pending.splice(i, 1);
+      }
+    }
+    return {
+      arm(at) {
+        const id = next++;
+        pending.push({ id, exp: (at == null ? Date.now() : at) + wait });
+        return id;
+      },
+      drop(id) {
+        const i = pending.findIndex((item) => item.id === id);
+        if (i >= 0) pending.splice(i, 1);
+      },
+      has(at) {
+        sweep(at);
+        return pending.length > 0;
+      },
+      take(at) {
+        sweep(at);
+        if (!pending.length) return false;
+        pending.shift();
+        return true;
+      },
+    };
+  },
+  overlayCenter(pageWidth, pageHeight, config) {
+    const x = config.xMm * (72 / 25.4);
+    const y = config.yMm == null ? pageHeight / 2 : config.yMm * (72 / 25.4);
+    return { x, y };
+  },
+  linePositions(lines, widths, fontSize, lineGap, center) {
+    const leading = fontSize + lineGap;
+    const top = center.y + (leading * lines.length) / 2;
+    return lines.map((text, i) => {
+      const width = widths[i];
+      return {
+        text,
+        x: center.x - width / 2,
+        y: top - fontSize - i * leading,
+      };
+    });
+  },
+  async overlayInvoicePdf(bytes, config, pdfLib) {
+    const { PDFDocument, StandardFonts, rgb } = pdfLib;
+    const doc = await PDFDocument.load(bytes);
+    const font = await doc.embedFont(StandardFonts.Helvetica);
+    for (const page of doc.getPages()) {
+      const size = page.getSize();
+      const center = LG.overlayCenter(size.width, size.height, config);
+      const widths = config.lines.map((line) => font.widthOfTextAtSize(line, config.fontSize));
+      const positions = LG.linePositions(config.lines, widths, config.fontSize, config.lineGap, center);
+      for (const pos of positions) {
+        page.drawText(pos.text, {
+          x: pos.x,
+          y: pos.y,
+          size: config.fontSize,
+          font,
+          color: rgb(0, 0, 0),
+        });
+      }
+    }
+    return doc.save();
+  },
 };
+
+function installInvoiceOverlay() {
+  if (window.__lgInvoiceOverlayPatched) return;
+  window.__lgInvoiceOverlayPatched = true;
+  LG.invoiceOverlayGate = LG.createInvoiceOverlayGate();
+
+  const pdfLib = typeof PDFLib !== 'undefined' ? PDFLib : window.PDFLib;
+  if (!pdfLib) console.warn('[LiaGold] pdf-lib belum ada, invoice lama tercetak tanpa overlay');
+
+  try {
+    const origOpen = XMLHttpRequest.prototype.open;
+    XMLHttpRequest.prototype.open = function (method, url) {
+      try {
+        if (LG.isOldSalesInvoiceUrl(url)) this.__lgOldInvoiceId = LG.invoiceOverlayGate.arm();
+      } catch (e) {
+        // ignore
+      }
+      return origOpen.apply(this, arguments);
+    };
+  } catch (e) {
+    // ignore
+  }
+
+  try {
+    const origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function () {
+      if (this.__lgOldInvoiceId != null) {
+        const xhr = this;
+        const cancel = () => {
+          if (xhr.__lgOldInvoiceDone) return;
+          xhr.__lgOldInvoiceDone = true;
+          LG.invoiceOverlayGate.drop(xhr.__lgOldInvoiceId);
+        };
+        try {
+          this.addEventListener('load', function () {
+            if (this.status < 200 || this.status >= 300) cancel();
+          });
+          this.addEventListener('error', cancel);
+          this.addEventListener('abort', cancel);
+        } catch (e) {
+          // ignore
+        }
+      }
+      return origSend.apply(this, arguments);
+    };
+  } catch (e) {
+    // ignore
+  }
+
+  const origRead = FileReader.prototype.readAsDataURL;
+  FileReader.prototype.readAsDataURL = function (blob) {
+    const reader = this;
+    const type = (blob && blob.type) || '';
+    const hint = type.indexOf('pdf') !== -1 ? 'yes' : (type === '' || type === 'application/octet-stream' ? 'maybe' : 'no');
+    if (hint === 'no' || !LG.invoiceOverlayGate.has() || !pdfLib) {
+      return origRead.call(reader, blob);
+    }
+    Promise.resolve().then(async () => {
+      let ok = hint === 'yes';
+      if (!ok) {
+        try {
+          const head = new Uint8Array(await blob.slice(0, 5).arrayBuffer());
+          ok = head[0] === 0x25 && head[1] === 0x50 && head[2] === 0x44 && head[3] === 0x46;
+        } catch (e) {
+          ok = false;
+        }
+      }
+      if (!ok || !LG.invoiceOverlayGate.take()) {
+        origRead.call(reader, blob);
+        return;
+      }
+      try {
+        const bytes = await blob.arrayBuffer();
+        const out = await LG.overlayInvoicePdf(bytes, LG_INVOICE_OVERLAY, pdfLib);
+        console.log('[LiaGold] invoice lama overlay');
+        origRead.call(reader, new Blob([out], { type: 'application/pdf' }));
+      } catch (e) {
+        console.warn('[LiaGold] invoice overlay gagal, cetak asli', e);
+        origRead.call(reader, blob);
+      }
+    });
+  };
+}
+installInvoiceOverlay();
 
 // ==========================================
 // MODULE 1: Gold ERP - Payment Method Detail
