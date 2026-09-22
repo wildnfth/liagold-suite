@@ -6,6 +6,10 @@ import {
   overlayCenter,
   linePositions,
   MM_TO_PT,
+  isYoungKaratToken,
+  karatColumnTokens,
+  shouldStampPage,
+  YOUNG_KARAT,
 } from '../lib/invoice-overlay.js';
 
 describe('isOldSalesInvoiceUrl', () => {
@@ -83,5 +87,49 @@ describe('overlay placement', () => {
     assert.ok(pos[0].y > pos[1].y);
     assert.ok(Math.abs(pos[0].x + 96.9 / 2 - 314.6) < 0.01);
     assert.ok(Math.abs(pos[1].x + 77.2 / 2 - 314.6) < 0.01);
+  });
+});
+
+describe('shouldStampPage', () => {
+  const width = 453;
+
+  it('skips the young karat column and ignores the same number in the name or SKU', () => {
+    assert.equal(isYoungKaratToken('8k'), true);
+    assert.equal(isYoungKaratToken('8 K'), true);
+    assert.equal(isYoungKaratToken('18K'), false);
+    assert.equal(isYoungKaratToken('9B'), false);
+    assert.equal(isYoungKaratToken('750'), false);
+    assert.equal(shouldStampPage([
+      { str: '< SATU > KALUNG 375 NORI CAT -', x: 90.2 },
+      { str: '375', x: 247.5 },
+      { str: '8K', x: 249.2 },
+      { str: 'KL37502N7', x: 90.2 },
+      { str: '3752.15', x: 90.2 },
+    ], width), false);
+    assert.equal(shouldStampPage([
+      { str: '< SATU > CINCIN 300 MP - UK 9', x: 90.2 },
+      { str: '300', x: 247.5 },
+      { str: 'MD', x: 248 },
+      { str: 'CC3000G6P', x: 90.2 },
+      { str: '3000.41', x: 90.2 },
+    ], width), false);
+  });
+
+  it('stamps kadar tua, empty column, and 9B', () => {
+    assert.equal(shouldStampPage([
+      { str: '18K', x: 249 },
+      { str: '750', x: 247.5 },
+    ], width), true);
+    assert.equal(shouldStampPage([
+      { str: '16K', x: 249 },
+    ], width), true);
+    assert.equal(shouldStampPage([
+      { str: '< SATU > CINCIN EMAS 9B RANTAI -', x: 90.2 },
+      { str: 'CC9B008I', x: 90.2 },
+      { str: '2.01', x: 318.5 },
+    ], width), true);
+    assert.equal(shouldStampPage([], width), true);
+    assert.equal(karatColumnTokens([{ str: '10-35%', x: 165 }], width).length, 0);
+    assert.equal(YOUNG_KARAT.includes('375'), true);
   });
 });

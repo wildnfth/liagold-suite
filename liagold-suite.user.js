@@ -1,9 +1,10 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.11
-// @description  v2.2.11: teks overlay di Cetak Invoice Lama sebelum QZ print
+// @version      2.2.12
+// @description  v2.2.12: overlay invoice lama hanya kadar tua
 // @require      https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js
+// @require      https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -27,6 +28,7 @@ const LG_INVOICE_OVERLAY = {
     'Potongan bisa berubah apabila',
     'harga emas turun +-10%',
   ],
+  skipKarat: ['6K', '8K', '9K', '10K', '300', '375', '420', '450'],
 };
 
 // synced from lib/*.js — keep LG bodies identical
@@ -1392,6 +1394,35 @@ text-align: right !important;
       },
     };
   },
+  normalizeKaratToken(text) {
+    return String(text || '').replace(/\s+/g, '').toUpperCase();
+  },
+  isYoungKaratToken(text, skipKarat) {
+    const token = LG.normalizeKaratToken(text);
+    if (!token) return false;
+    const list = skipKarat && skipKarat.length ? skipKarat : ['6K', '8K', '9K', '10K', '300', '375', '420', '450'];
+    return list.some((item) => LG.normalizeKaratToken(item) === token);
+  },
+  karatColumnTokens(items, pageWidth) {
+    const width = pageWidth || 0;
+    if (!width) return [];
+    const xMin = width * 0.48;
+    const xMax = width * 0.66;
+    const found = [];
+    for (const item of items || []) {
+      const x = item && item.x;
+      if (x == null || x < xMin || x > xMax) continue;
+      const parts = String(item.str || item.text || '').split(/\s+/);
+      for (const part of parts) {
+        const token = LG.normalizeKaratToken(part);
+        if (token) found.push(token);
+      }
+    }
+    return found;
+  },
+  shouldStampPage(items, pageWidth, skipKarat) {
+    return !LG.karatColumnTokens(items, pageWidth).some((token) => LG.isYoungKaratToken(token, skipKarat));
+  },
   overlayCenter(pageWidth, pageHeight, config) {
     const x = config.xMm * (72 / 25.4);
     const y = config.yMm == null ? pageHeight / 2 : config.yMm * (72 / 25.4);
@@ -1409,11 +1440,14 @@ text-align: right !important;
       };
     });
   },
-  async overlayInvoicePdf(bytes, config, pdfLib) {
+  async overlayInvoicePdf(bytes, config, pdfLib, stampPages) {
     const { PDFDocument, StandardFonts, rgb } = pdfLib;
     const doc = await PDFDocument.load(bytes);
     const font = await doc.embedFont(StandardFonts.Helvetica);
-    for (const page of doc.getPages()) {
+    const pages = doc.getPages();
+    for (let i = 0; i < pages.length; i++) {
+      if (stampPages && !stampPages[i]) continue;
+      const page = pages[i];
       const size = page.getSize();
       const center = LG.overlayCenter(size.width, size.height, config);
       const widths = config.lines.map((line) => font.widthOfTextAtSize(line, config.fontSize));
@@ -1438,7 +1472,8 @@ function installInvoiceOverlay() {
   LG.invoiceOverlayGate = LG.createInvoiceOverlayGate();
 
   const pdfLib = typeof PDFLib !== 'undefined' ? PDFLib : window.PDFLib;
-  if (!pdfLib) console.warn('[LiaGold] pdf-lib belum ada, invoice lama tercetak tanpa overlay');
+  const pdfjs = typeof pdfjsLib !== 'undefined' ? pdfjsLib : window.pdfjsLib;
+  if (!pdfLib || !pdfjs) console.warn('[LiaGold] pdf-lib/pdfjs belum ada, invoice lama tercetak tanpa overlay');
 
   try {
     const origOpen = XMLHttpRequest.prototype.open;
@@ -1485,7 +1520,7 @@ function installInvoiceOverlay() {
     const reader = this;
     const type = (blob && blob.type) || '';
     const hint = type.indexOf('pdf') !== -1 ? 'yes' : (type === '' || type === 'application/octet-stream' ? 'maybe' : 'no');
-    if (hint === 'no' || !LG.invoiceOverlayGate.has() || !pdfLib) {
+    if (hint === 'no' || !LG.invoiceOverlayGate.has() || !pdfLib || !pdfjs) {
       return origRead.call(reader, blob);
     }
     Promise.resolve().then(async () => {
@@ -1504,8 +1539,33 @@ function installInvoiceOverlay() {
       }
       try {
         const bytes = await blob.arrayBuffer();
-        const out = await LG.overlayInvoicePdf(bytes, LG_INVOICE_OVERLAY, pdfLib);
-        console.log('[LiaGold] invoice lama overlay');
+        const copy = bytes.slice(0);
+        const doc = await pdfjs.getDocument({
+          data: new Uint8Array(copy),
+          disableWorker: true,
+          isEvalSupported: false,
+        }).promise;
+        const infos = [];
+        for (let i = 1; i <= doc.numPages; i++) {
+          const page = await doc.getPage(i);
+          const content = await page.getTextContent();
+          infos.push({
+            width: page.getViewport({ scale: 1 }).width,
+            items: content.items.filter((item) => item && item.str && item.str.trim()).map((item) => ({
+              str: item.str,
+              x: item.transform[4],
+            })),
+          });
+        }
+        if (doc.destroy) doc.destroy();
+        const stampPages = infos.map((info) => LG.shouldStampPage(info.items, info.width, LG_INVOICE_OVERLAY.skipKarat));
+        if (!stampPages.some(Boolean)) {
+          console.log('[LiaGold] invoice lama kadar muda, tanpa overlay');
+          origRead.call(reader, blob);
+          return;
+        }
+        const out = await LG.overlayInvoicePdf(bytes, LG_INVOICE_OVERLAY, pdfLib, stampPages);
+        console.log('[LiaGold] invoice lama overlay', stampPages);
         origRead.call(reader, new Blob([out], { type: 'application/pdf' }));
       } catch (e) {
         console.warn('[LiaGold] invoice overlay gagal, cetak asli', e);
