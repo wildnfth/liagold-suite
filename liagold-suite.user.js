@@ -1,10 +1,11 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.12
-// @description  v2.2.12: overlay invoice lama hanya kadar tua
+// @version      2.2.13
+// @description  v2.2.13: overlay kadar tua, pdf.js tanpa worker URL
 // @require      https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js
 // @require      https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js
+// @require      https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -1473,6 +1474,9 @@ function installInvoiceOverlay() {
 
   const pdfLib = typeof PDFLib !== 'undefined' ? PDFLib : window.PDFLib;
   const pdfjs = typeof pdfjsLib !== 'undefined' ? pdfjsLib : window.pdfjsLib;
+  if (pdfjs && pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
+    pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js';
+  }
   if (!pdfLib || !pdfjs) console.warn('[LiaGold] pdf-lib/pdfjs belum ada, invoice lama tercetak tanpa overlay');
 
   try {
