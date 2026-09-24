@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.13
-// @description  v2.2.13: overlay kadar tua, pdf.js tanpa worker URL
+// @version      2.2.14
+// @description  v2.2.14: overlay kadar tua lebih besar, geser kanan
 // @require      https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js
 // @require      https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js
 // @require      https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js
@@ -21,10 +21,10 @@ window.__lgUltimateSuite = true;
 // Geser teks Cetak Invoice Lama di sini, lalu refresh halaman.
 // xMm = milimeter dari tepi kiri PDF. yMm = null berarti tengah vertikal.
 const LG_INVOICE_OVERLAY = {
-  xMm: 111,
+  xMm: 133.2,
   yMm: null,
-  fontSize: 7,
-  lineGap: 1.5,
+  fontSize: 8.4,
+  lineGap: 1.8,
   lines: [
     'Potongan bisa berubah apabila',
     'harga emas turun +-10%',
