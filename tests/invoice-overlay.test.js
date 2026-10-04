@@ -9,6 +9,7 @@ import {
   isYoungKaratToken,
   karatColumnTokens,
   shouldStampPage,
+  isLogamMuliaText,
   YOUNG_KARAT,
 } from '../lib/invoice-overlay.js';
 
@@ -131,5 +132,21 @@ describe('shouldStampPage', () => {
     assert.equal(shouldStampPage([], width), true);
     assert.equal(karatColumnTokens([{ str: '10-35%', x: 165 }], width).length, 0);
     assert.equal(YOUNG_KARAT.includes('375'), true);
+  });
+
+  it('skips logam mulia by name or LM in the kadar column', () => {
+    assert.equal(isLogamMuliaText('< SATU > LM ANTAM 5 GR -'), true);
+    assert.equal(isLogamMuliaText('LOGAM MULIA 1GR'), true);
+    assert.equal(isLogamMuliaText('LM'), true);
+    assert.equal(isLogamMuliaText('KALUNG FILM 18K'), false);
+    assert.equal(isLogamMuliaText('LM5GR001'), false);
+    assert.equal(shouldStampPage([
+      { str: '< SATU > LM ANTAM 5 GR -', x: 90.2 },
+      { str: '5.00', x: 318.5 },
+    ], width), false);
+    assert.equal(shouldStampPage([
+      { str: '< SATU > EMAS BATANGAN 10 GR -', x: 90.2 },
+      { str: 'LM', x: 249 },
+    ], width), false);
   });
 });

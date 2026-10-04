@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.14
-// @description  v2.2.14: overlay kadar tua lebih besar, geser kanan
+// @version      2.2.15
+// @description  v2.2.15: overlay invoice lama skip LM
 // @require      https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js
 // @require      https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js
 // @require      https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js
@@ -1421,7 +1421,11 @@ text-align: right !important;
     }
     return found;
   },
+  isLogamMuliaText(text) {
+    return /(^|[^A-Z0-9])(LM|ANTAM|LOGAM\s*MULIA)([^A-Z0-9]|$)/i.test(String(text || ''));
+  },
   shouldStampPage(items, pageWidth, skipKarat) {
+    if ((items || []).some((item) => item && LG.isLogamMuliaText(item.str || item.text))) return false;
     return !LG.karatColumnTokens(items, pageWidth).some((token) => LG.isYoungKaratToken(token, skipKarat));
   },
   overlayCenter(pageWidth, pageHeight, config) {
@@ -1564,7 +1568,7 @@ function installInvoiceOverlay() {
         if (doc.destroy) doc.destroy();
         const stampPages = infos.map((info) => LG.shouldStampPage(info.items, info.width, LG_INVOICE_OVERLAY.skipKarat));
         if (!stampPages.some(Boolean)) {
-          console.log('[LiaGold] invoice lama kadar muda, tanpa overlay');
+          console.log('[LiaGold] invoice lama kadar muda/LM, tanpa overlay');
           origRead.call(reader, blob);
           return;
         }
