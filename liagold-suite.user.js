@@ -1,11 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.16
-// @description  v2.2.16: scanner render bertahap, tidak bangun ulang tabel tiap scan
-// @require      https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js
-// @require      https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js
-// @require      https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js
+// @version      2.2.17
+// @description  v2.2.17: library PDF dimuat saat perlu, observer dan total bayar lebih ringan
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -1148,6 +1145,9 @@ const LG = {
     };
     return labels[key] || String(method).trim();
   },
+  slimSalesItem(item) {
+    return { CashBanks: item ? item.CashBanks : undefined };
+  },
   aggregateSalesPayments(items) {
     const list = Array.isArray(items) ? items : [];
     const totals = new Map();
@@ -1220,6 +1220,15 @@ const LG = {
     } catch (e) {
       return false;
     }
+  },
+  slimPurchasingItem(item) {
+    const src = item || {};
+    return {
+      CashBanks: src.CashBanks,
+      PaymentMethodName: src.PaymentMethodName,
+      PaymentMethod: src.PaymentMethod,
+      TotalPurchase: src.TotalPurchase,
+    };
   },
   purchasingPaymentLines(item) {
     const fromCash = LG.parseSalesCashBanks(item && item.CashBanks);
@@ -1381,6 +1390,14 @@ text-align: right !important;
 }
 `;
   },
+  PDF_LIB_URLS: [
+    'https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js',
+    'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js',
+    'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js',
+  ],
+  shouldPreloadPdfLibs(pathname) {
+    return /^\/sales(\/|$)/.test(String(pathname || ''));
+  },
   isOldSalesInvoiceUrl(url) {
     if (typeof url !== 'string' || !url) return false;
     let parsed;
@@ -1501,23 +1518,69 @@ text-align: right !important;
   },
 };
 
+// pdf-lib + pdf.js (sekitar 2 MB) hanya dipakai Cetak Invoice Lama: muat saat perlu, bukan di tiap halaman.
+let pdfLibsPromise = null;
+function currentPdfLibs() {
+  const pdfLib = window.PDFLib;
+  const pdfjs = window.pdfjsLib;
+  if (!pdfLib || !pdfjs) return null;
+  if (pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
+    pdfjs.GlobalWorkerOptions.workerSrc = LG.PDF_LIB_URLS[2];
+  }
+  return { pdfLib, pdfjs };
+}
+function loadPdfLibScript(src) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement('script');
+    el.src = src;
+    el.onload = () => resolve();
+    el.onerror = () => {
+      el.remove();
+      reject(new Error('gagal memuat ' + src));
+    };
+    document.head.appendChild(el);
+  });
+}
+function ensurePdfLibs() {
+  const ready = currentPdfLibs();
+  if (ready) return Promise.resolve(ready);
+  if (!pdfLibsPromise) {
+    pdfLibsPromise = LG.PDF_LIB_URLS
+      .reduce((p, src) => p.then(() => loadPdfLibScript(src)), Promise.resolve())
+      .then(() => currentPdfLibs())
+      .catch((e) => {
+        console.warn('[LiaGold] ' + e.message);
+        return null;
+      })
+      .then((libs) => {
+        if (!libs) pdfLibsPromise = null;
+        return libs;
+      });
+  }
+  return pdfLibsPromise;
+}
+let pdfPreloadTimer = 0;
+function maybePreloadPdfLibs() {
+  if (pdfPreloadTimer || currentPdfLibs() || !LG.shouldPreloadPdfLibs(location.pathname)) return;
+  pdfPreloadTimer = setTimeout(() => {
+    pdfPreloadTimer = 0;
+    if (LG.shouldPreloadPdfLibs(location.pathname)) ensurePdfLibs();
+  }, 2000);
+}
+
 function installInvoiceOverlay() {
   if (window.__lgInvoiceOverlayPatched) return;
   window.__lgInvoiceOverlayPatched = true;
   LG.invoiceOverlayGate = LG.createInvoiceOverlayGate();
 
-  const pdfLib = typeof PDFLib !== 'undefined' ? PDFLib : window.PDFLib;
-  const pdfjs = typeof pdfjsLib !== 'undefined' ? pdfjsLib : window.pdfjsLib;
-  if (pdfjs && pdfjs.GlobalWorkerOptions && !pdfjs.GlobalWorkerOptions.workerSrc) {
-    pdfjs.GlobalWorkerOptions.workerSrc = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js';
-  }
-  if (!pdfLib || !pdfjs) console.warn('[LiaGold] pdf-lib/pdfjs belum ada, invoice lama tercetak tanpa overlay');
-
   try {
     const origOpen = XMLHttpRequest.prototype.open;
     XMLHttpRequest.prototype.open = function (method, url) {
       try {
-        if (LG.isOldSalesInvoiceUrl(url)) this.__lgOldInvoiceId = LG.invoiceOverlayGate.arm();
+        if (LG.isOldSalesInvoiceUrl(url)) {
+          this.__lgOldInvoiceId = LG.invoiceOverlayGate.arm();
+          ensurePdfLibs();
+        }
       } catch (e) {
         // ignore
       }
@@ -1558,7 +1621,7 @@ function installInvoiceOverlay() {
     const reader = this;
     const type = (blob && blob.type) || '';
     const hint = type.indexOf('pdf') !== -1 ? 'yes' : (type === '' || type === 'application/octet-stream' ? 'maybe' : 'no');
-    if (hint === 'no' || !LG.invoiceOverlayGate.has() || !pdfLib || !pdfjs) {
+    if (hint === 'no' || !LG.invoiceOverlayGate.has()) {
       return origRead.call(reader, blob);
     }
     Promise.resolve().then(async () => {
@@ -1576,6 +1639,14 @@ function installInvoiceOverlay() {
         return;
       }
       try {
+        const libs = await ensurePdfLibs();
+        if (!libs) {
+          console.warn('[LiaGold] pdf-lib/pdfjs gagal dimuat, invoice lama tercetak tanpa overlay');
+          origRead.call(reader, blob);
+          return;
+        }
+        const pdfLib = libs.pdfLib;
+        const pdfjs = libs.pdfjs;
         const bytes = await blob.arrayBuffer();
         const copy = bytes.slice(0);
         const doc = await pdfjs.getDocument({
@@ -1613,6 +1684,7 @@ function installInvoiceOverlay() {
   };
 }
 installInvoiceOverlay();
+maybePreloadPdfLibs();
 
 // ==========================================
 // MODULE 1: Gold ERP - Payment Method Detail
@@ -2593,7 +2665,7 @@ installInvoiceOverlay();
         cls += ` ${FOOTER_NEG_CLASS}`;
       }
 
-      td.className = cls;
+      if (td.className !== cls) td.className = cls;
 
       const w = `${Math.max(metrics[i].width, 0)}px`;
 
@@ -3174,10 +3246,19 @@ window.__goldTotalUpdating = false;
 }, 0);
 }
 }, 180);
-const observer = new MutationObserver(() => {
-if (!window.__goldTotalUpdating) {
-safeUpdate();
+// Abaikan mutasi panel LiaGold sendiri dan perubahan class yang tidak menyangkut tabel.
+const isRelevantMutation = (m) => {
+const t = m.target && m.target.nodeType === 1 ? m.target : (m.target && m.target.parentElement);
+if (!t || !t.closest) return true;
+if (t.closest('#lg-panel, #lgt-panel, #lg-fab, #lgt-fab, #lgt-toast')) return false;
+if (m.type === 'attributes' && m.attributeName === 'class') {
+return !!t.closest('table') || !!t.querySelector('table.mat-table');
 }
+return true;
+};
+const observer = new MutationObserver((mutations) => {
+if (window.__goldTotalUpdating || document.hidden) return;
+if (mutations.some(isRelevantMutation)) safeUpdate();
 });
 observer.observe(document.documentElement, {
 childList: true,
@@ -3187,7 +3268,12 @@ attributes: true,
 attributeFilter: ['data-val', 'class']
 });
 updateAll();
-setInterval(safeUpdate, 2500);
+setInterval(() => {
+if (!document.hidden) safeUpdate();
+}, 2500);
+document.addEventListener('visibilitychange', () => {
+if (!document.hidden) safeUpdate();
+});
 })();
 
 // ==========================================
@@ -3209,6 +3295,12 @@ setInterval(safeUpdate, 2500);
   let pageItems = new Map();
   let totalCount = 0;
   let fetching = new Set();
+  let dataVersion = 0;
+  let aggCache = null;
+  let extraQueue = [];
+  let activeExtra = 0;
+  let renderTimer = 0;
+  const EXTRA_LIMIT = 4;
 
   function injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
@@ -3303,9 +3395,12 @@ setInterval(safeUpdate, 2500);
 
       injectStyle();
 
-      const items = allItems();
-      const agg = LG.aggregateSalesPayments(items);
-      const loaded = items.length;
+      if (!aggCache || aggCache.version !== dataVersion) {
+        const items = allItems();
+        aggCache = { version: dataVersion, agg: LG.aggregateSalesPayments(items), loaded: items.length };
+      }
+      const agg = aggCache.agg;
+      const loaded = aggCache.loaded;
       const known = totalCount || loaded;
       const pending = fetching.size > 0 && loaded < known;
       const label = salesBarLabel(agg, loaded, known, pending);
@@ -3353,21 +3448,32 @@ setInterval(safeUpdate, 2500);
     if (fetching.has(extraUrl)) return;
     fetching.add(url);
     fetching.add(extraUrl);
-    origFetch.call(window, extraUrl, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' }
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
+    extraQueue.push({ url, extraUrl });
+    pumpExtra();
+  }
+
+  function pumpExtra() {
+    while (activeExtra < EXTRA_LIMIT && extraQueue.length) {
+      const job = extraQueue.shift();
+      activeExtra++;
+      origFetch.call(window, job.extraUrl, {
+        credentials: 'include',
+        headers: { Accept: 'application/json' }
       })
-      .then((json) => absorb(extraUrl, json))
-      .catch(() => {})
-      .finally(() => {
-        fetching.delete(url);
-        fetching.delete(extraUrl);
-        render();
-      });
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((json) => absorb(job.extraUrl, json))
+        .catch(() => {})
+        .finally(() => {
+          activeExtra--;
+          fetching.delete(job.url);
+          fetching.delete(job.extraUrl);
+          pumpExtra();
+          render();
+        });
+    }
   }
 
   function absorb(url, json) {
@@ -3386,12 +3492,15 @@ setInterval(safeUpdate, 2500);
       filterKey = key;
       pageItems = new Map();
       fetching = new Set();
+      extraQueue = [];
+      dataVersion++;
     }
 
     sourceUrl = url;
     const page = LG.salesApiPageNumber(url);
     const items = Array.isArray(json.items) ? json.items : [];
-    pageItems.set(page, items);
+    pageItems.set(page, items.map(LG.slimSalesItem));
+    dataVersion++;
     if (Number.isFinite(Number(json.totalCount))) totalCount = Number(json.totalCount);
 
     const size = pageSizeOf(url, items.length);
@@ -3475,16 +3584,23 @@ setInterval(safeUpdate, 2500);
     // ignore
   }
 
-  const observer = new MutationObserver(() => {
+  function tick() {
+    if (document.hidden) return;
     if (LG.isSalesListPage(location.pathname)) render();
     else removeBar();
+  }
+
+  const observer = new MutationObserver(() => {
+    if (renderTimer) return;
+    renderTimer = setTimeout(() => {
+      renderTimer = 0;
+      tick();
+    }, 100);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
-  setInterval(() => {
-    if (LG.isSalesListPage(location.pathname)) render();
-    else removeBar();
-  }, 2500);
+  setInterval(tick, 2500);
+  document.addEventListener('visibilitychange', tick);
 
   render();
 })();
@@ -3508,6 +3624,12 @@ setInterval(safeUpdate, 2500);
   let pageItems = new Map();
   let totalCount = 0;
   let fetching = new Set();
+  let dataVersion = 0;
+  let aggCache = null;
+  let extraQueue = [];
+  let activeExtra = 0;
+  let renderTimer = 0;
+  const EXTRA_LIMIT = 4;
 
   function injectStyle() {
     if (document.getElementById(STYLE_ID)) return;
@@ -3605,9 +3727,12 @@ setInterval(safeUpdate, 2500);
 
       injectStyle();
 
-      const items = allItems();
-      const agg = LG.aggregatePurchasingPayments(items);
-      const loaded = items.length;
+      if (!aggCache || aggCache.version !== dataVersion) {
+        const items = allItems();
+        aggCache = { version: dataVersion, agg: LG.aggregatePurchasingPayments(items), loaded: items.length };
+      }
+      const agg = aggCache.agg;
+      const loaded = aggCache.loaded;
       const known = totalCount || loaded;
       const pending = fetching.size > 0 && loaded < known;
       const label = purchasingBarLabel(agg, loaded, known, pending);
@@ -3655,21 +3780,32 @@ setInterval(safeUpdate, 2500);
     if (fetching.has(extraUrl)) return;
     fetching.add(url);
     fetching.add(extraUrl);
-    origFetch.call(window, extraUrl, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' }
-    })
-      .then((res) => {
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        return res.json();
+    extraQueue.push({ url, extraUrl });
+    pumpExtra();
+  }
+
+  function pumpExtra() {
+    while (activeExtra < EXTRA_LIMIT && extraQueue.length) {
+      const job = extraQueue.shift();
+      activeExtra++;
+      origFetch.call(window, job.extraUrl, {
+        credentials: 'include',
+        headers: { Accept: 'application/json' }
       })
-      .then((json) => absorb(extraUrl, json))
-      .catch(() => {})
-      .finally(() => {
-        fetching.delete(url);
-        fetching.delete(extraUrl);
-        render();
-      });
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`);
+          return res.json();
+        })
+        .then((json) => absorb(job.extraUrl, json))
+        .catch(() => {})
+        .finally(() => {
+          activeExtra--;
+          fetching.delete(job.url);
+          fetching.delete(job.extraUrl);
+          pumpExtra();
+          render();
+        });
+    }
   }
 
   function absorb(url, json) {
@@ -3688,12 +3824,15 @@ setInterval(safeUpdate, 2500);
       filterKey = key;
       pageItems = new Map();
       fetching = new Set();
+      extraQueue = [];
+      dataVersion++;
     }
 
     sourceUrl = url;
     const page = LG.salesApiPageNumber(url);
     const items = Array.isArray(json.items) ? json.items : [];
-    pageItems.set(page, items);
+    pageItems.set(page, items.map(LG.slimPurchasingItem));
+    dataVersion++;
     if (Number.isFinite(Number(json.totalCount))) totalCount = Number(json.totalCount);
 
     const size = pageSizeOf(url, items.length);
@@ -3777,16 +3916,23 @@ setInterval(safeUpdate, 2500);
     // ignore
   }
 
-  const observer = new MutationObserver(() => {
+  function tick() {
+    if (document.hidden) return;
     if (LG.isPurchasingListPage(location.pathname)) render();
     else removeBar();
+  }
+
+  const observer = new MutationObserver(() => {
+    if (renderTimer) return;
+    renderTimer = setTimeout(() => {
+      renderTimer = 0;
+      tick();
+    }, 100);
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
-  setInterval(() => {
-    if (LG.isPurchasingListPage(location.pathname)) render();
-    else removeBar();
-  }, 2500);
+  setInterval(tick, 2500);
+  document.addEventListener('visibilitychange', tick);
 
   render();
 })();
@@ -4021,6 +4167,7 @@ const key = getSelectionKey(span);
 selectionMemory.delete(key);
 }
 function reapplySelections() {
+if (!selectionMemory.size) return;
 document.querySelectorAll('.lgt-num').forEach(span => {
 const key = getSelectionKey(span);
 if (selectionMemory.has(key)) {
@@ -4218,10 +4365,14 @@ function scan(root) {
 const tables = root.querySelectorAll(TABLE_ZONE);
 const list = [];
 tables.forEach((table) => {
+// tabel bersarang sudah ikut ditelusuri lewat tabel induknya
+if (table.parentElement && table.parentElement.closest(TABLE_ZONE)) return;
 const walker = document.createTreeWalker(table, NodeFilter.SHOW_TEXT, {
 acceptNode(n) {
 const p = n.parentNode;
 if (!p || !p.closest) return NodeFilter.FILTER_REJECT;
+if (!/\d/.test(n.nodeValue || '')) return NodeFilter.FILTER_REJECT;
+if (p.classList && p.classList.contains('lgt-num')) return NodeFilter.FILTER_REJECT;
 if (p.closest(SKIP)) return NodeFilter.FILTER_REJECT;
 return NodeFilter.FILTER_ACCEPT;
 }
@@ -4508,7 +4659,7 @@ countdownEl.style.fontWeight = remaining < 60 * 60 * 1000 ? '700' : '600';
 function startCountdownInterval() {
 stopCountdownInterval();
 countdownIntervalId = setInterval(() => {
-updateCountdownDisplay();
+if (panelVisible) updateCountdownDisplay();
 if (isDataExpired()) {
 if (isMulti()) {
 handleOnlineExpiry();
@@ -6649,6 +6800,7 @@ p.style.display = 'block';
 f.textContent = '✕';
 f.style.background = '#dc2626';
 if (renderPending) renderAll();
+updateCountdownDisplay();
 autoSelectFormTray();
 setTimeout(focusScanInput, 100);
 } else {
@@ -7020,6 +7172,7 @@ window.addEventListener('DOMContentLoaded', () => setTimeout(init, 500));
 }
 function bootByRoute() {
 try {
+maybePreloadPdfLibs();
 applyRouteClasses();
 if (isTotalPage()) startTotalizer();
 if (isScannerPage()) startScanner();
