@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.15
-// @description  v2.2.15: overlay invoice lama skip LM
+// @version      2.2.16
+// @description  v2.2.16: scanner render bertahap, tidak bangun ulang tabel tiap scan
 // @require      https://cdn.jsdelivr.net/npm/pdf-lib@1.17.1/dist/pdf-lib.min.js
 // @require      https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.min.js
 // @require      https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/legacy/build/pdf.worker.min.js
@@ -589,6 +589,36 @@ const LG = {
     const merged = (cloudEntries || []).concat(extra);
     merged.sort((a, b) => String(b.timeIso || '').localeCompare(String(a.timeIso || '')));
     return merged;
+  },
+  planKeyedRemoval(prevKeys, nextKeys) {
+    const prev = prevKeys || [];
+    const next = nextKeys || [];
+    if (next.length > prev.length) return null;
+    const remove = [];
+    let j = 0;
+    for (let i = 0; i < prev.length; i++) {
+      if (j < next.length && prev[i] === next[j]) j++;
+      else remove.push(i);
+    }
+    return j === next.length ? remove : null;
+  },
+  planLogPrepend(prevSigs, nextSigs, maxPrepend) {
+    const prev = prevSigs || [];
+    const next = nextSigs || [];
+    const max = maxPrepend == null ? 20 : Number(maxPrepend);
+    for (let k = 0; k <= next.length && k <= max; k++) {
+      const keep = next.length - k;
+      if (keep > prev.length) continue;
+      let ok = true;
+      for (let i = 0; i < keep; i++) {
+        if (next[k + i] !== prev[i]) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) return { prepend: k, drop: prev.length - keep };
+    }
+    return null;
   },
   scanLoadGuard({ isLoading, productCount }) {
     if (isLoading) return 'loading';
@@ -4404,6 +4434,11 @@ localStorage.setItem(PENDING_KEY, JSON.stringify(pendingCloudPushes));
 let retryTimer = null;
 let audioCtx = null;
 let renderThrottleTimer = null;
+let renderPending = false;
+let productRowsCache = null;
+let logRowsCache = null;
+let suggestTimer = null;
+let restoreFormListTimer = null;
 let persistDebounceTimer = null;
 let initialized = false;
 let filterBtnBound = false;
@@ -4732,15 +4767,29 @@ s.textContent = '.' + LG.FORM_LIST_OPTIMIZE_CLASS + ' ul.product-item{content-vi
 document.head.appendChild(s);
 }
 function hideFormList() {
+if (restoreFormListTimer) {
+clearTimeout(restoreFormListTimer);
+restoreFormListTimer = null;
+}
 const el = document.querySelector('.list-section');
 if (!el) return;
 ensureFormFillOptStyle();
-el.className = LG.formListOptimizeClassNames(el.className, true);
+const next = LG.formListOptimizeClassNames(el.className, true);
+if (el.className !== next) el.className = next;
 }
 function restoreFormList() {
 const el = document.querySelector('.list-section');
 if (!el) return;
-el.className = LG.formListOptimizeClassNames(el.className, false);
+const next = LG.formListOptimizeClassNames(el.className, false);
+if (el.className !== next) el.className = next;
+}
+// Scan beruntun: jangan lepas-pasang class tiap scan, lepas setelah antrean diam.
+function restoreFormListSoon() {
+if (restoreFormListTimer) clearTimeout(restoreFormListTimer);
+restoreFormListTimer = setTimeout(() => {
+restoreFormListTimer = null;
+if (!isProcessingForm) restoreFormList();
+}, 3000);
 }
 function clearFormQueue() {
 formQueue = [];
@@ -4895,11 +4944,10 @@ ctx.presentSet = LG.collectPresentCodes(formQueue, getFormListText());
 hideFormList();
 await drainFormQueue(ctx);
 } finally {
-restoreFormList();
 isProcessingForm = false;
 isStoppingForm = false;
+restoreFormListSoon();
 syncStopFormButton();
-try { updateStats(); } catch (e) {}
 try { renderLog(); } catch (e) {}
 try { applyFilters(); } catch (e) {}
 focusScanInput();
@@ -5074,6 +5122,7 @@ if (pendingCloudPushes.length) scheduleRetryPush();
 updateStatus(`✅ ${ok}/${count} scan solo terunggah — progress LANJUT.`);
 }
 async function createSession() {
+flushPersist();
 const nama = document.getElementById('lg-mp-name').value.trim() || 'Anonim';
 myName = nama;
 localStorage.setItem('lg_mp_name', nama);
@@ -5116,6 +5165,7 @@ updateStatus('❌ Gagal buat sesi: ' + e.message + ' (cek Rules Firebase)');
 }
 }
 async function joinSession() {
+flushPersist();
 const nama = document.getElementById('lg-mp-name').value.trim() || 'Anonim';
 const code = document.getElementById('lg-mp-code').value.trim().toUpperCase();
 if (!code) {
@@ -5256,9 +5306,19 @@ persistDebounceTimer = null;
 persistScanLog();
 }, 1000);
 }
+function flushPersist() {
+if (!persistDebounceTimer) return;
+clearTimeout(persistDebounceTimer);
+persistDebounceTimer = null;
+persistScanLog();
+}
 window.addEventListener('beforeunload', () => {
 if (scanLog.length) persistScanLog();
 if (pendingCloudPushes.length) persistPendingPushes();
+});
+window.addEventListener('pagehide', flushPersist);
+document.addEventListener('visibilitychange', () => {
+if (document.hidden) flushPersist();
 });
 async function verifySessionAlive() {
 if (!sessionId || isDeletingSession) return;
@@ -5466,14 +5526,21 @@ queueFormInput(scan.codeProduct);
 initialCloudSyncDone = true;
 scheduleRender();
 }
-function scheduleRender() {
-if (renderThrottleTimer) return;
-renderThrottleTimer = setTimeout(() => {
-renderThrottleTimer = null;
-updateStats();
+function renderAll() {
+renderPending = false;
 renderLog();
 applyFilters();
 updateCountdownDisplay();
+}
+function scheduleRender() {
+if (!panelVisible) {
+renderPending = true;
+return;
+}
+if (renderThrottleTimer) return;
+renderThrottleTimer = setTimeout(() => {
+renderThrottleTimer = null;
+renderAll();
 }, 200);
 }
 async function pushDupe(code) {
@@ -5967,7 +6034,7 @@ return;
 }
 if (st === ST.MASUK) scannedCodes.add(view.finalCodeProduct.toLowerCase());
 rememberScan(logEntry);
-persistScanLog();
+debouncedPersist();
 scheduleRender();
 updateLastScanAt();
 }
@@ -6066,7 +6133,7 @@ const cards = [
 ];
 const el = document.getElementById('lg-stats');
 if (!el) return;
-el.innerHTML = cards.map(c => {
+if (el.childElementCount !== cards.length) el.innerHTML = cards.map(c => {
 const clickable = !!c.filter;
 const active = c.filter && c.filter === statusFilter;
 const classes = [];
@@ -6082,7 +6149,14 @@ style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:8px 6p
 </div>
 `;
 }).join('');
-el.querySelectorAll('.lg-stat-clickable').forEach(card => {
+Array.from(el.children).forEach((card, i) => {
+const c = cards[i];
+const valueEl = card.firstElementChild;
+const value = String(c.v);
+if (valueEl && valueEl.textContent !== value) valueEl.textContent = value;
+card.classList.toggle('lg-stat-active', !!c.filter && c.filter === statusFilter);
+if (!c.filter || card.dataset.lgBound) return;
+card.dataset.lgBound = '1';
 card.addEventListener('click', () => {
 const filter = card.dataset.filter;
 if (!filter) return;
@@ -6096,19 +6170,21 @@ applyFilters();
 });
 const bar = document.getElementById('lg-progress-bar');
 if (bar) {
-bar.style.width = pct + '%';
-bar.textContent = pct > 8 ? pct + '%' : '';
+const width = pct + '%';
+const text = pct > 8 ? pct + '%' : '';
+if (bar.style.width !== width) bar.style.width = width;
+if (bar.textContent !== text) bar.textContent = text;
 }
 }
-function renderLog() {
-if (isProcessingForm) return;
-const el = document.getElementById('lg-log');
-if (!el) return;
-if (!scanLog.length) {
-el.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">Belum ada riwayat scan</td></tr>';
-return;
+function rowFromHtml(html) {
+const holder = document.createElement('tbody');
+holder.innerHTML = html;
+return holder.firstElementChild;
 }
-el.innerHTML = scanLog.slice(0, 150).map(l => {
+function logRowSig(l) {
+return [l.time, l.scanCode, l.codeProduct, l.name, l.tray, l.by, l.status, l.image].join('\u0001');
+}
+function logRowHtml(l) {
 const s = Object.values(ST).find(x => x.label === l.status) || ST.TIDAK_ADA;
 return `<tr style="border-bottom:1px solid #f1f5f9;">
 <td style="padding:6px 8px;font-size:10px;color:#94a3b8;white-space:nowrap;">${esc(l.time)}</td>
@@ -6119,12 +6195,81 @@ return `<tr style="border-bottom:1px solid #f1f5f9;">
 <td style="padding:6px 8px;font-size:10px;text-align:center;color:#64748b;">${esc(l.by || '-')}</td>
 <td style="padding:6px 8px;"><span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:9px;font-weight:700;color:${s.color};background:${s.bg};border:1px solid ${s.bd};white-space:nowrap;">${esc(l.status)}</span></td>
 </tr>`;
-}).join('');
+}
+function renderLog() {
+if (isProcessingForm) return;
+const el = document.getElementById('lg-log');
+if (!el) return;
+if (!scanLog.length) {
+logRowsCache = null;
+el.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#94a3b8;padding:16px;">Belum ada riwayat scan</td></tr>';
+return;
+}
+const top = scanLog.slice(0, 150);
+const sigs = top.map(logRowSig);
+const c = logRowsCache;
+const plan = c && c.el === el && el.childElementCount === c.sigs.length
+? LG.planLogPrepend(c.sigs, sigs, 20)
+: null;
+if (plan) {
+for (let i = 0; i < plan.drop; i++) el.lastElementChild.remove();
+for (let i = plan.prepend - 1; i >= 0; i--) {
+const tr = rowFromHtml(logRowHtml(top[i]));
+el.insertBefore(tr, el.firstChild);
+bindImageLinks(tr);
+}
+} else {
+el.innerHTML = top.map(logRowHtml).join('');
 bindImageLinks(el);
+}
+logRowsCache = { el, sigs };
+}
+function productRowHtml(p, i, sc) {
+return `<tr style="${sc ? 'opacity:0.45;background:#f0fdf4;' : ''}border-bottom:1px solid #f1f5f9;">
+<td style="padding:5px 8px;text-align:center;font-size:10px;color:#94a3b8;">${i + 1}</td>
+<td style="padding:5px 8px;"><a href="#" class="lg-img-link" data-img="${escAttr(p.image)}" data-name="${escAttr(p.name)}" data-code="${escAttr(p.codeProduct)}" data-weight="${escAttr(p.weight)}" style="color:#2563eb;text-decoration:none;font-weight:600;font-size:11px;font-family:monospace;">${esc(p.codeProduct)}</a></td>
+<td style="padding:5px 8px;font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</td>
+<td style="padding:5px 8px;text-align:center;font-size:10px;color:#64748b;">${esc(p.trayCode)}</td>
+<td style="padding:5px 8px;text-align:center;font-size:10px;">${p.weight} gr</td>
+<td style="padding:5px 8px;text-align:center;font-size:10px;">${esc(p.kadar)}</td>
+<td style="padding:5px 8px;text-align:right;font-size:10px;">Rp${Number(p.price).toLocaleString('id-ID')}</td>
+<td style="padding:5px 8px;text-align:center;">${sc ? '✅' : '⬜'}</td>
+</tr>`;
+}
+// Scan biasa hanya mengubah beberapa baris: tambal baris itu saja, jangan bangun ulang seluruh tabel.
+function patchProductRows(el) {
+const c = productRowsCache;
+if (!c || c.el !== el || c.source !== allProducts || el.childElementCount !== c.rows.length) return false;
+const remove = LG.planKeyedRemoval(c.items, filteredProducts);
+if (!remove || remove.length > 40) return false;
+const kept = c.rows.filter((row, i) => !remove.includes(i));
+const isScanned = (p) => scannedCodes.has(String(p.codeProduct).toLowerCase());
+const flips = kept.filter((row, j) => row.sc !== isScanned(filteredProducts[j])).length;
+if (flips > 40) return false;
+remove.forEach((i) => c.rows[i].tr.remove());
+kept.forEach((row, j) => {
+const p = filteredProducts[j];
+const sc = isScanned(p);
+if (row.sc !== sc) {
+const tr = rowFromHtml(productRowHtml(p, j, sc));
+row.tr.replaceWith(tr);
+bindImageLinks(tr);
+row.tr = tr;
+row.sc = sc;
+} else if (row.no !== j) {
+row.tr.firstElementChild.textContent = j + 1;
+}
+row.no = j;
+});
+c.rows = kept;
+c.items = filteredProducts.slice();
+return true;
 }
 function renderProducts() {
 const el = document.getElementById('lg-products');
 if (!el) return;
+if (filteredProducts.length && patchProductRows(el)) return;
+productRowsCache = null;
 const table = el.closest('table');
 if (table) {
 const thead = table.querySelector('thead tr');
@@ -6150,24 +6295,20 @@ const m = scanFilter === 'unscanned'
 el.innerHTML = `<tr><td colspan="8" style="text-align:center;color:#94a3b8;padding:16px;">${m}</td></tr>`;
 return;
 }
-el.innerHTML = filteredProducts.map((p, i) => {
-const sc = scannedCodes.has(String(p.codeProduct).toLowerCase());
-return `<tr style="${sc ? 'opacity:0.45;background:#f0fdf4;' : ''}border-bottom:1px solid #f1f5f9;">
-<td style="padding:5px 8px;text-align:center;font-size:10px;color:#94a3b8;">${i + 1}</td>
-<td style="padding:5px 8px;"><a href="#" class="lg-img-link" data-img="${escAttr(p.image)}" data-name="${escAttr(p.name)}" data-code="${escAttr(p.codeProduct)}" data-weight="${escAttr(p.weight)}" style="color:#2563eb;text-decoration:none;font-weight:600;font-size:11px;font-family:monospace;">${esc(p.codeProduct)}</a></td>
-<td style="padding:5px 8px;font-size:11px;max-width:130px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(p.name)}</td>
-<td style="padding:5px 8px;text-align:center;font-size:10px;color:#64748b;">${esc(p.trayCode)}</td>
-<td style="padding:5px 8px;text-align:center;font-size:10px;">${p.weight} gr</td>
-<td style="padding:5px 8px;text-align:center;font-size:10px;">${esc(p.kadar)}</td>
-<td style="padding:5px 8px;text-align:right;font-size:10px;">Rp${Number(p.price).toLocaleString('id-ID')}</td>
-<td style="padding:5px 8px;text-align:center;">${sc ? '✅' : '⬜'}</td>
-</tr>`;
-}).join('');
+const flags = filteredProducts.map((p) => scannedCodes.has(String(p.codeProduct).toLowerCase()));
+el.innerHTML = filteredProducts.map((p, i) => productRowHtml(p, i, flags[i])).join('');
 bindImageLinks(el);
+productRowsCache = {
+el,
+source: allProducts,
+items: filteredProducts.slice(),
+rows: Array.from(el.children).map((tr, i) => ({ tr, sc: flags[i], no: i })),
+};
 }
 function renderProductsFromLog() {
 const el = document.getElementById('lg-products');
 if (!el) return;
+productRowsCache = null;
 const table = el.closest('table');
 if (table) {
 const thead = table.querySelector('thead tr');
@@ -6507,6 +6648,7 @@ if (panelVisible) {
 p.style.display = 'block';
 f.textContent = '✕';
 f.style.background = '#dc2626';
+if (renderPending) renderAll();
 autoSelectFormTray();
 setTimeout(focusScanInput, 100);
 } else {
@@ -6526,6 +6668,10 @@ if (dd) dd.style.display = 'none';
 if (!e.target.closest('#lg-scan-input') && !e.target.closest('#lg-suggest')) hideSuggestions();
 }
 function hideSuggestions() {
+if (suggestTimer) {
+clearTimeout(suggestTimer);
+suggestTimer = null;
+}
 const box = document.getElementById('lg-suggest');
 if (box) {
 box.style.display = 'none';
@@ -6741,8 +6887,15 @@ fab.onmouseleave = () => fab.style.transform = 'scale(1)';
 document.body.appendChild(fab);
 fab.addEventListener('click', togglePanel);
 document.getElementById('lg-close').addEventListener('click', togglePanel);
+// Scanner gun mengetik per karakter: tunda saran supaya tidak dihitung ulang tiap karakter.
 document.getElementById('lg-scan-input').addEventListener('input', e => {
-renderSuggestions(e.target.value);
+const inp = e.target;
+suggestIndex = -1;
+if (suggestTimer) clearTimeout(suggestTimer);
+suggestTimer = setTimeout(() => {
+suggestTimer = null;
+renderSuggestions(inp.value);
+}, 120);
 });
 document.getElementById('lg-suggest').addEventListener('mousemove', () => {
 suggestIgnoreHover = false;
