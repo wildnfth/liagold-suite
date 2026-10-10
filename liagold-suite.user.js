@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.18
-// @description  v2.2.18: multiplayer, hasil scan tidak menunggu kiriman ke Firebase
+// @version      2.2.19
+// @description  v2.2.19: auto-isi form menunggu kodenya muncul, tidak kirim ulang saat ERP lambat
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -774,6 +774,35 @@ const LG = {
     if (longMs == null) longMs = 6000;
     if (shortMs == null) shortMs = 1500;
     return hadSuccess ? shortMs : longMs;
+  },
+  formWaitTimeout({ avgMs, hadSuccess, longMs, minMs, maxMs } = {}) {
+    if (longMs == null) longMs = 6000;
+    if (minMs == null) minMs = 1500;
+    if (maxMs == null) maxMs = 15000;
+    const adaptive = avgMs == null
+      ? minMs
+      : Math.min(maxMs, Math.max(minMs, Math.round(Number(avgMs) * 4) + 500));
+    return hadSuccess ? adaptive : Math.max(longMs, adaptive);
+  },
+  nextFillAverage(avgMs, fillMs) {
+    const ms = Number(fillMs);
+    if (!Number.isFinite(ms) || ms < 0) return avgMs == null ? null : avgMs;
+    if (avgMs == null) return ms;
+    return Math.round(Number(avgMs) * 0.7 + ms * 0.3);
+  },
+  planLegacyFill({ changed, presenceMode, changedForMs, graceMs } = {}) {
+    if (!changed) return false;
+    if (presenceMode === true) return false;
+    if (presenceMode === false) return true;
+    return Number(changedForMs) >= (graceMs == null ? 400 : Number(graceMs));
+  },
+  formFailureNote(codes, max) {
+    const list = (codes || []).map((c) => String(c));
+    if (!list.length) return '';
+    const lim = max == null ? 5 : Number(max);
+    const shown = list.slice(0, lim).join(', ');
+    const more = list.length > lim ? ` +${list.length - lim} lagi` : '';
+    return `⚠️ ${list.length} kode gagal masuk form: ${shown}${more}`;
   },
   planFormUnavailable({ hasInput, retryCount, maxRetry } = {}) {
     if (hasInput) return { action: 'run', retryCount: 0 };
@@ -4591,6 +4620,12 @@ let cloudPushQueue = [];
 let cloudPushBusy = false;
 let lastScanAtWriteMs = 0;
 let cloudEntryCache = new Map();
+let ownPushKeys = new Set();
+let formFillAvgMs = null;
+// true: kode yang masuk tampil di daftar form; false: tidak tampil (pakai deteksi lama); null: belum tahu
+let formPresenceMode = null;
+let formPresenceMisses = 0;
+let formPresenceDoubt = 0;
 const PENDING_KEY = 'lg_pendingCloudPushes';
 function persistPendingPushes() {
 try {
@@ -4888,11 +4923,13 @@ if (btn) btn.click();
 }
 }
 function getFormListText() {
-let txt = '';
+const parts = [];
 document.querySelectorAll('.list-section ul.product-item').forEach(ul => {
-txt += ' ' + (ul.textContent || '');
+const walker = document.createTreeWalker(ul, NodeFilter.SHOW_TEXT);
+let node;
+while ((node = walker.nextNode())) parts.push(node.nodeValue || '');
 });
-return txt.toLowerCase();
+return parts.join(' ').toLowerCase();
 }
 function getFormProductCount() {
 return document.querySelectorAll('.list-section ul.product-item').length;
@@ -4906,25 +4943,63 @@ if (help && val) counters[help.textContent.trim()] = val.textContent.trim();
 });
 return JSON.stringify(counters);
 }
-async function waitForFormFill(beforeCount, beforeSig, timeout) {
+function formHasCode(code) {
+return LG.codeInFormText(code, getFormListText());
+}
+function yieldToPaint() {
+// requestAnimationFrame tidak jalan di tab tersembunyi: jangan biarkan antrean ikut berhenti.
+return new Promise((resolve) => {
+let done = false;
+const finish = () => {
+if (done) return;
+done = true;
+resolve();
+};
+requestAnimationFrame(finish);
+setTimeout(finish, 60);
+});
+}
+async function waitForCodeInForm(code, timeout) {
+const until = Date.now() + timeout;
+while (Date.now() < until) {
+if (formHasCode(code)) return true;
+if (isStoppingForm) return false;
+await sleep(150);
+}
+return formHasCode(code);
+}
+// result: 'present' (kode muncul di daftar form), 'changed' (hanya counter berubah), atau null (habis waktu).
+async function waitForFormFill(code, beforeCount, beforeSig, timeout) {
 if (timeout == null) timeout = 6000;
 return new Promise((resolve) => {
 let done = false;
-const finish = (ok) => {
+let changedAt = 0;
+const finish = (result) => {
 if (done) return;
 done = true;
 try { obs.disconnect(); } catch (e) {}
 clearInterval(poll);
 clearTimeout(tid);
-resolve(ok);
+resolve({ result, changed: !!changedAt });
 };
 const check = () => {
-if (LG.formFillDetected({
+if (done) return;
+if (formHasCode(code)) {
+finish('present');
+return;
+}
+const changed = LG.formFillDetected({
 beforeCount,
 afterCount: getFormProductCount(),
 beforeSig,
 afterSig: getFormCounters(),
-})) finish(true);
+});
+if (changed && !changedAt) changedAt = Date.now();
+if (LG.planLegacyFill({
+changed,
+presenceMode: formPresenceMode,
+changedForMs: changedAt ? Date.now() - changedAt : 0,
+})) finish('changed');
 };
 const root = document.querySelector('.list-section') || document.querySelector('.label-info-cont') || document.body;
 const obs = new MutationObserver(check);
@@ -4932,7 +5007,10 @@ try {
 obs.observe(root, { childList: true, subtree: true, characterData: true });
 } catch (e) {}
 const poll = setInterval(check, 120);
-const tid = setTimeout(() => finish(false), timeout);
+const tid = setTimeout(() => {
+check();
+finish(null);
+}, timeout);
 check();
 });
 }
@@ -5035,16 +5113,34 @@ async function fillFormCode(code, lc, ctx) {
 const beforeCount = getFormProductCount();
 const beforeSig = getFormCounters();
 const filled = fillCodeProductToForm(code);
-let changed = false;
+let result = null;
+let sawChange = false;
 const t0 = Date.now();
 if (filled) {
 clickSearchBtn();
 focusScanInput();
-changed = await waitForFormFill(beforeCount, beforeSig, LG.nextFormWaitTimeout(ctx.processed > 0));
+const waited = await waitForFormFill(code, beforeCount, beforeSig, LG.formWaitTimeout({ avgMs: formFillAvgMs, hadSuccess: ctx.processed > 0 }));
+result = waited.result;
+sawChange = waited.changed;
 focusScanInput();
 }
 ctx.lastFillMs = Date.now() - t0;
-if (changed) ctx.presentSet.add(lc);
+const changed = !!result;
+if (result === 'present') {
+formPresenceMode = true;
+formPresenceDoubt = 0;
+} else if (result === 'changed' && formPresenceMode == null) {
+formPresenceMisses++;
+if (formPresenceMisses >= 2) formPresenceMode = false;
+} else if (!result && sawChange && formPresenceMode === true) {
+// Form berubah tapi kodenya tidak pernah terlihat, berkali-kali: deteksi kode tidak cocok dengan form ini, pakai cara lama.
+formPresenceDoubt++;
+if (formPresenceDoubt >= 3) formPresenceMode = false;
+}
+if (changed) {
+ctx.presentSet.add(lc);
+formFillAvgMs = LG.nextFillAverage(formFillAvgMs, ctx.lastFillMs);
+}
 const decision = LG.recordFormAttempt(formAttemptCounts, lc, changed);
 if (decision.markFilled) {
 formFilledCodes.add(lc);
@@ -5054,9 +5150,18 @@ ctx.batchCount++;
 LG.enqueueFormCode(formQueue, formQueuedCodes, formFilledCodes, code);
 updateStatus(`⚠️ Gagal input ${code}. Retry ${formAttemptCounts.get(lc)}/${LG.MAX_FORM_CODE_ATTEMPTS}…`);
 } else {
+ctx.failed.push(code);
 updateStatus(`⚠️ Gagal input ${code} setelah ${LG.MAX_FORM_CODE_ATTEMPTS}x. Dilewati.`);
 }
-await new Promise((r) => requestAnimationFrame(() => r()));
+await yieldToPaint();
+}
+function markFormCodePresent(lc, ctx) {
+formPresenceMode = true;
+formPresenceDoubt = 0;
+formFilledCodes.add(lc);
+formAttemptCounts.delete(lc);
+ctx.presentSet.add(lc);
+ctx.processed++;
 }
 async function drainFormQueue(ctx) {
 while (formQueue.length) {
@@ -5088,6 +5193,14 @@ ctx.exitedEarly = true;
 if (plan.action !== 'give-up') ctx.returnEarly = true;
 break;
 }
+// Kode yang tadi habis waktu sering ternyata masuk belakangan: tunggu dan cek dulu, jangan kirim dobel.
+if (formAttemptCounts.has(step.lc) && formPresenceMode !== false) {
+await waitForCodeInForm(code, Math.min(4000, LG.formWaitTimeout({ avgMs: formFillAvgMs, hadSuccess: true })));
+}
+if (formHasCode(code)) {
+markFormCodePresent(step.lc, ctx);
+continue;
+}
 await fillFormCode(code, step.lc, ctx);
 }
 }
@@ -5115,11 +5228,18 @@ exitedEarly: false,
 returnEarly: false,
 totalItems: formQueue.length,
 presentSet: null,
+failed: [],
 };
 try {
 ctx.presentSet = LG.collectPresentCodes(formQueue, getFormListText());
 hideFormList();
 await drainFormQueue(ctx);
+// Yang dilaporkan gagal tapi ternyata sudah ada di form bukan gagal.
+ctx.failed = ctx.failed.filter((code) => {
+if (!formHasCode(code)) return true;
+markFormCodePresent(String(code).toLowerCase(), ctx);
+return false;
+});
 } finally {
 isProcessingForm = false;
 isStoppingForm = false;
@@ -5136,8 +5256,10 @@ exitedEarly: ctx.exitedEarly,
 stopping: isStoppingForm,
 remaining: formQueue.length,
 });
-if (kind === 'success') updateStatus(`✅ ${ctx.processed} kode berhasil diinput ke form.`);
+const failNote = LG.formFailureNote(ctx.failed);
+if (kind === 'success') updateStatus(`✅ ${ctx.processed} kode berhasil diinput ke form.${failNote ? ' ' + failNote : ''}`);
 else if (kind === 'paused') updateStatus(`⏸️ ${ctx.processed} kode terinput. Form hilang, sisa di-retry.`);
+else if (failNote) updateStatus(failNote);
 }
 async function fbPut(path, data) {
 const res = await fetch(`${FIREBASE}${path}.json`, {
@@ -5195,6 +5317,7 @@ catalogWriteTimer = null;
 async function pushScanToCloud(entry, retries = 3, sid = sessionId) {
 if (!isMulti() || sessionId !== sid) return;
 const uniqueKey = generateHistoryKey(entry.codeProduct, entry.time);
+ownPushKeys.add(uniqueKey);
 for (let i = 0; i < retries; i++) {
 if (!isMulti() || sessionId !== sid) return;
 try {
@@ -5215,6 +5338,7 @@ await sleep(400 * (i + 1));
 // Kiriman scan berjalan di latar, satu per satu sesuai urutan scan; hasil scan tidak menunggunya.
 function enqueueCloudPush(entry) {
 if (!isMulti()) return;
+ownPushKeys.add(generateHistoryKey(entry.codeProduct, entry.time));
 cloudPushQueue.push({ entry, sid: sessionId });
 drainCloudPushQueue();
 }
@@ -5243,6 +5367,7 @@ pendingCloudPushes.push(entry);
 break;
 }
 const uniqueKey = entry.uniqueKey || generateHistoryKey(entry.codeProduct, entry.time);
+ownPushKeys.add(uniqueKey);
 try {
 await fbPut(`/opname/${sessionId}/history/${uniqueKey}`, entry);
 } catch (e) {
@@ -5278,6 +5403,7 @@ let count = 0;
 byCode.forEach((l, k) => {
 const uniqueKey = generateHistoryKey(l.codeProduct, l.timeIso || '');
 if (!l.timeIso || existingKeys.has(uniqueKey)) return;
+ownPushKeys.add(uniqueKey);
 payload[uniqueKey] = {
 by: myName,
 time: l.timeIso || new Date().toISOString(),
@@ -5446,6 +5572,7 @@ pendingCloudPushes = [];
 cloudPushQueue = [];
 lastScanAtWriteMs = 0;
 cloudEntryCache = new Map();
+ownPushKeys = new Set();
 try { localStorage.removeItem(PENDING_KEY); } catch (e) {}
 esFailCount = 0;
 statusFilter = 'none';
@@ -5727,7 +5854,7 @@ if (initialCloudSyncDone && autoFillForm && newKeys.length) {
 newKeys.forEach(k => {
 const scan = cloudHistory[k];
 if (!scan || !scan.codeProduct) return;
-if (scan.by === myName) return;
+if (ownPushKeys.has(k)) return;
 if (isEntryExpired(scan)) return;
 if (!shouldQueueToForm(scan)) return;
 queueFormInput(scan.codeProduct);
@@ -6716,6 +6843,7 @@ updateStatus(`✅ Semua ${eligible.length} barang baki ini sudah ada di form.`);
 return;
 }
 if (!confirm(`📊 Hasil pemeriksaan form (baki aktif):\n✅ Sudah ada di form : ${already} barang\n📤 Belum ada di form : ${missing.length} barang\nLanjutkan?`)) return;
+formAttemptCounts = new Map();
 LG.beginFormSend(formQueue, formQueuedCodes, formFilledCodes, missing);
 updateStatus(`📤 Mengirim ${missing.length} barang ke form (batch: ${batchSize}, delay: ${batchDelay}ms)...`);
 processFormQueue();
