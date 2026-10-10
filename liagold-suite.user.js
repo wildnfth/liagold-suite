@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         LiaGold Suite Ultimate
 // @namespace    https://github.com/wildnfth/liagold-suite
-// @version      2.2.17
-// @description  v2.2.17: library PDF dimuat saat perlu, observer dan total bayar lebih ringan
+// @version      2.2.18
+// @description  v2.2.18: multiplayer, hasil scan tidak menunggu kiriman ke Firebase
 // @homepageURL  https://github.com/wildnfth/liagold-suite
 // @supportURL   https://github.com/wildnfth/liagold-suite/issues
 // @match        https://liagold.cuan.co/*
@@ -586,6 +586,21 @@ const LG = {
     const merged = (cloudEntries || []).concat(extra);
     merged.sort((a, b) => String(b.timeIso || '').localeCompare(String(a.timeIso || '')));
     return merged;
+  },
+  shouldWriteLastScanAt(lastWriteMs, nowMs, minGapMs) {
+    const gap = minGapMs == null ? 60000 : Number(minGapMs);
+    const last = Number(lastWriteMs) || 0;
+    if (!last) return true;
+    return Number(nowMs) - last >= gap;
+  },
+  unsentPushEntries(queue, sessionId) {
+    const out = [];
+    for (const job of queue || []) {
+      if (!job || !job.entry || !job.entry.codeProduct) continue;
+      if (job.sid !== sessionId) continue;
+      out.push(job.entry);
+    }
+    return out;
   },
   planKeyedRemoval(prevKeys, nextKeys) {
     const prev = prevKeys || [];
@@ -4572,6 +4587,10 @@ let scanQueue = [];
 let isScanning = false;
 let pendingLocalScans = new Set();
 let pendingCloudPushes = [];
+let cloudPushQueue = [];
+let cloudPushBusy = false;
+let lastScanAtWriteMs = 0;
+let cloudEntryCache = new Map();
 const PENDING_KEY = 'lg_pendingCloudPushes';
 function persistPendingPushes() {
 try {
@@ -4620,7 +4639,14 @@ return false;
 function updateLastScanAt() {
 lastScanAt = new Date().toISOString();
 if (isMulti()) {
-fbPut(`/opname/${sessionId}/meta/lastScanAt`, lastScanAt).catch(() => {});
+// Hanya dipakai untuk batas kedaluwarsa 12 jam: cukup ditulis sesekali, bukan tiap scan.
+const nowMs = Date.now();
+if (LG.shouldWriteLastScanAt(lastScanAtWriteMs, nowMs)) {
+lastScanAtWriteMs = nowMs;
+fbPut(`/opname/${sessionId}/meta/lastScanAt`, lastScanAt).catch(() => {
+lastScanAtWriteMs = 0;
+});
+}
 } else {
 localStorage.setItem('lg_lastScanAt', lastScanAt);
 }
@@ -5166,13 +5192,13 @@ clearTimeout(catalogWriteTimer);
 catalogWriteTimer = null;
 }
 }
-async function pushScanToCloud(entry, retries = 3) {
-if (!isMulti()) return;
+async function pushScanToCloud(entry, retries = 3, sid = sessionId) {
+if (!isMulti() || sessionId !== sid) return;
 const uniqueKey = generateHistoryKey(entry.codeProduct, entry.time);
 for (let i = 0; i < retries; i++) {
-if (!isMulti()) return;
+if (!isMulti() || sessionId !== sid) return;
 try {
-await fbPut(`/opname/${sessionId}/history/${uniqueKey}`, entry);
+await fbPut(`/opname/${sid}/history/${uniqueKey}`, entry);
 return;
 } catch (e) {
 if (i === retries - 1) {
@@ -5184,6 +5210,25 @@ scheduleRetryPush();
 await sleep(400 * (i + 1));
 }
 }
+}
+}
+// Kiriman scan berjalan di latar, satu per satu sesuai urutan scan; hasil scan tidak menunggunya.
+function enqueueCloudPush(entry) {
+if (!isMulti()) return;
+cloudPushQueue.push({ entry, sid: sessionId });
+drainCloudPushQueue();
+}
+async function drainCloudPushQueue() {
+if (cloudPushBusy) return;
+cloudPushBusy = true;
+try {
+while (cloudPushQueue.length) {
+const job = cloudPushQueue[0];
+await pushScanToCloud(job.entry, 3, job.sid);
+if (cloudPushQueue[0] === job) cloudPushQueue.shift();
+}
+} finally {
+cloudPushBusy = false;
 }
 }
 function scheduleRetryPush() {
@@ -5398,6 +5443,9 @@ clearFormQueue();
 formRetryCount = 0;
 pendingLocalScans = new Set();
 pendingCloudPushes = [];
+cloudPushQueue = [];
+lastScanAtWriteMs = 0;
+cloudEntryCache = new Map();
 try { localStorage.removeItem(PENDING_KEY); } catch (e) {}
 esFailCount = 0;
 statusFilter = 'none';
@@ -5465,6 +5513,9 @@ persistScanLog();
 }
 window.addEventListener('beforeunload', () => {
 if (scanLog.length) persistScanLog();
+LG.unsentPushEntries(cloudPushQueue, sessionId).forEach((entry) => {
+pendingCloudPushes.push({ ...entry, uniqueKey: generateHistoryKey(entry.codeProduct, entry.time) });
+});
 if (pendingCloudPushes.length) persistPendingPushes();
 });
 window.addEventListener('pagehide', flushPersist);
@@ -5624,11 +5675,21 @@ updateStatus('⚠️ Gagal re-sync.');
 }
 function onCloudUpdate() {
 const newScannedCodes = new Set();
+const cloudCodes = new Set();
 const historyEntries = [];
-Object.values(cloudHistory || {}).forEach(v => {
+const nextCache = new Map();
+const nowMs = Date.now();
+// Tiap event hanya mengubah satu-dua entri: entri yang sumbernya sama dipakai ulang.
+Object.entries(cloudHistory || {}).forEach(([key, v]) => {
 if (!v || !v.codeProduct) return;
-if (isEntryExpired(v)) return;
-historyEntries.push({
+const lc = String(v.codeProduct).toLowerCase();
+cloudCodes.add(lc);
+let cached = cloudEntryCache.get(key);
+if (!cached || cached.src !== v) {
+cached = {
+src: v,
+ts: v.time ? new Date(v.time).getTime() : NaN,
+entry: {
 time: v.time ? new Date(v.time).toLocaleString('id-ID') : '-',
 timeIso: v.time || '',
 scanCode: v.scanCode || v.codeProduct,
@@ -5639,21 +5700,19 @@ tray: v.tray || '-',
 image: v.image || '',
 status: v.status || '',
 by: v.by || '',
-});
-if (v.status === 'MASUK') {
-newScannedCodes.add(String(v.codeProduct).toLowerCase());
+},
+};
 }
+nextCache.set(key, cached);
+if (nowMs - cached.ts > DATA_TTL_MS) return;
+historyEntries.push(cached.entry);
+if (v.status === 'MASUK') newScannedCodes.add(lc);
 });
+cloudEntryCache = nextCache;
 pendingLocalScans.forEach(rawCode => newScannedCodes.add(rawCode));
 scannedCodes = newScannedCodes;
 pendingLocalScans.forEach(rawCode => {
-let found = false;
-Object.values(cloudHistory || {}).forEach(v => {
-if (v && v.codeProduct && String(v.codeProduct).toLowerCase() === rawCode) {
-found = true;
-}
-});
-if (found) pendingLocalScans.delete(rawCode);
+if (cloudCodes.has(rawCode)) pendingLocalScans.delete(rawCode);
 });
 scanLog = LG.mergeInflightScanLog(historyEntries, scanLog, cloudHistory);
 debouncedPersist();
@@ -6171,7 +6230,7 @@ pendingLocalScans.add(view.finalCodeProduct.toLowerCase());
 debouncedPersist();
 scheduleRender();
 updateLastScanAt();
-await pushScanToCloud({
+enqueueCloudPush({
 by: myName,
 time: now.toISOString(),
 status: st.label,
@@ -6565,6 +6624,7 @@ if (!confirm('Reset SEMUA progress sesi (untuk semua peserta)?')) return;
 try {
 await LG.deleteSessionNodes(fetch, LG.sessionResetUrls(FIREBASE, sessionId));
 pendingLocalScans = new Set();
+cloudPushQueue = [];
 knownCloudKeys = new Set();
 const fresh = LG.emptyScanState();
 scanLog = fresh.scanLog;
